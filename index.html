@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
+    <meta name="apple-mobile-web-app-capable" content="yes"/>
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+    <meta name="apple-mobile-web-app-title" content="Arte Dental"/>
+    <meta name="mobile-web-app-capable" content="yes"/>
+    <meta name="theme-color" content="#4f46e5"/>
+    <meta name="msapplication-TileColor" content="#4f46e5"/>
+    <meta name="format-detection" content="telephone=no"/>
+    <title>Arte Dental - Sistema en la Nube</title>
+    <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%234f46e5' width='100' height='100' rx='20'/><text x='50' y='68' text-anchor='middle' font-size='50'>🦷</text></svg>"/>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🦷</text></svg>"/>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+    <script>tailwind.config={theme:{extend:{colors:{brand:{50:'#f0f4ff',100:'#e0e7ff',500:'#6366f1',600:'#4f46e5',700:'#4338ca',900:'#312e81'}}}}}</script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+    <style>
+        *{-webkit-tap-highlight-color:transparent;-webkit-touch-callout:none}
+        body{font-family:'Inter',system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+        input,select,textarea{font-size:16px!important}
+        @media print{.no-print{display:none!important}}
+        @keyframes fadeIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+        @keyframes spin{to{transform:rotate(360deg)}}
+        .animate-fade-in{animation:fadeIn .3s ease-out forwards}
+        .animate-spin{animation:spin 1s linear infinite}
+        .scrollbar-hide::-webkit-scrollbar{display:none}
+        .scrollbar-hide{-ms-overflow-style:none;scrollbar-width:none}
+        .medical-alert{background:linear-gradient(135deg,#fce7f3 0%,#fdf2f8 100%);border-left:4px solid #ec4899}
+        .safe-bottom{padding-bottom:env(safe-area-inset-bottom)}
+        .safe-top{padding-top:env(safe-area-inset-top)}
+        @supports(padding:max(0px)){.safe-bottom{padding-bottom:max(1rem,env(safe-area-inset-bottom))}}
+    </style>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script type="importmap">{"imports":{"react":"https://esm.sh/react@18.2.0","react-dom/client":"https://esm.sh/react-dom@18.2.0/client","lucide-react":"https://esm.sh/lucide-react@0.263.1"}}</script>
+</head>
+<body class="bg-slate-50 text-gray-800">
+<div id="root"></div>
+<script type="text/babel" data-type="module">
+import React,{useState,useEffect,useRef} from 'react';
+import {createRoot} from 'react-dom/client';
+import {Trash2,Calendar,Users,Search,FileText,Printer,Save,PlusCircle,Edit2,Shield,RotateCcw,Image as ImageIcon,UserPlus,LogOut,LayoutDashboard,Download,Upload,RefreshCw,Key,X,Phone,UserCheck,UserX,CreditCard,Trash,Pill,AlertTriangle,FileHeart,HeartPulse,Syringe,Building2,Cloud,CloudOff,Wifi,WifiOff,ClipboardList,Menu} from 'lucide-react';
+
+const SUPABASE_URL='https://gffhlahrjwiojdewvxws.supabase.co';
+const SUPABASE_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdmZmhsYWhyandpb2pkZXd2eHdzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjY5NDA2ODYsImV4cCI6MjA4MjUxNjY4Nn0.yUdUDPYU63-70l-a2b3fqxDfb_GkX6hUveHRwaYcadc';
+const supabase=window.supabase.createClient(SUPABASE_URL,SUPABASE_KEY);
+const Role={ADMIN:'admin',ODONTOLOGO:'odontologo',USUARIO:'usuario'};
+
+const DB={
+    online:false,
+    check:async()=>{try{const{error}=await supabase.from('users').select('id').limit(1);DB.online=!error;return DB.online}catch{DB.online=false;return false}},
+    getAll:async(t)=>{try{const{data,error}=await supabase.from(t).select('*').order('id');if(error)throw error;return data||[]}catch(e){console.error('GET',t,e);return[]}},
+    insert:async(t,r)=>{try{const{data,error}=await supabase.from(t).insert(r).select().single();if(error)throw error;return data}catch(e){console.error('INSERT',t,e);return null}},
+    update:async(t,id,r)=>{try{const{data,error}=await supabase.from(t).update(r).eq('id',id).select().single();if(error)throw error;return data}catch(e){console.error('UPDATE',t,e);return null}},
+    delete:async(t,id)=>{try{const{error}=await supabase.from(t).delete().eq('id',id);return!error}catch{return false}}
+};
+
+const S={
+    init:async()=>{const ok=await DB.check();if(ok){const u=await DB.getAll('users');if(!u.length)await DB.insert('users',{username:'Admin',password:'10680',name:'Administrador',role:Role.ADMIN})}return ok},
+    getUsers:()=>DB.getAll('users'),
+    saveUser:async u=>u.id?DB.update('users',u.id,u):DB.insert('users',u),
+    delUser:id=>DB.delete('users',id),
+    getPatients:async()=>(await DB.getAll('patients')).filter(p=>!p.deleted),
+    savePatient:async p=>p.id?DB.update('patients',p.id,p):DB.insert('patients',p),
+    delPatient:id=>DB.update('patients',id,{deleted:true}),
+    getApps:async()=>(await DB.getAll('appointments')).filter(a=>!a.deleted),
+    saveApp:async a=>a.id?DB.update('appointments',a.id,a):DB.insert('appointments',a),
+    delApp:id=>DB.update('appointments',id,{deleted:true}),
+    getHist:async pid=>(await DB.getAll('history')).filter(h=>String(h.paciente_id)===String(pid)&&!h.deleted).sort((a,b)=>b.id-a.id),
+    saveHist:h=>DB.insert('history',h),
+    getImgs:async pid=>(await DB.getAll('images')).filter(i=>String(i.paciente_id)===String(pid)&&!i.deleted),
+    saveImg:i=>DB.insert('images',i),
+    delImg:id=>DB.update('images',id,{deleted:true}),
+    getMed:async pid=>{const all=await DB.getAll('medical_records');return all.find(r=>String(r.paciente_id)===String(pid))||null},
+    saveMed:async r=>{const ex=await S.getMed(r.paciente_id);return ex?DB.update('medical_records',ex.id,r):DB.insert('medical_records',r)},
+    hasCond:async pid=>{const r=await S.getMed(pid);if(!r)return false;return(r.alergias?.length>0)||(r.alergias_medicamentos?.length>0)||(r.medicacion_actual?.length>0)||Object.entries(r.antecedentes_personales||{}).some(([k,v])=>k!=='otros'&&v===true)},
+    export:async()=>JSON.stringify({users:await DB.getAll('users'),patients:await DB.getAll('patients'),appointments:await DB.getAll('appointments'),history:await DB.getAll('history'),images:await DB.getAll('images'),medical_records:await DB.getAll('medical_records')},null,2),
+    import:async d=>{try{const j=JSON.parse(d);for(const[t,rs]of Object.entries(j)){for(const r of rs){delete r.id;await DB.insert(t,r)}}return true}catch(e){console.error('IMPORT',e);return false}}
+};
+
+const Status=({on})=><div className={`px-2 py-1 rounded-full text-[9px] font-bold flex items-center gap-1 ${on?'bg-emerald-500 text-white':'bg-red-500 text-white'}`}>{on?<><Wifi size={10}/>ON</>:<><WifiOff size={10}/>OFF</>}</div>;
+
+const Login=({onLogin,online})=>{
+    const[u,setU]=useState('');const[p,setP]=useState('');const[err,setErr]=useState('');
+    const go=async()=>{setErr('');const us=await S.getUsers();const f=us.find(x=>x.username===u&&x.password===p);f?onLogin(f):setErr('Credenciales inválidas')};
+    return<div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-br from-brand-600 to-indigo-900 text-white p-4 safe-top safe-bottom"><div className="absolute top-4 right-4"><Status on={online}/></div><div className="mb-6 text-center"><div className="text-6xl mb-3">🦷</div><h1 className="text-2xl font-bold mb-1">Arte Dental</h1><p className="text-white/70 text-sm">Sistema en la Nube</p></div><div className="bg-white/10 backdrop-blur-lg rounded-2xl p-6 w-full max-w-xs border border-white/20"><input placeholder="Usuario" value={u} onChange={e=>setU(e.target.value)} className="w-full p-3 bg-white/20 border border-white/30 rounded-xl text-white placeholder-white/60 mb-3"/><input type="password" placeholder="Contraseña" value={p} onChange={e=>setP(e.target.value)} onKeyPress={e=>e.key==='Enter'&&go()} className="w-full p-3 bg-white/20 border border-white/30 rounded-xl text-white placeholder-white/60 mb-4"/>{err&&<p className="text-red-200 text-sm mb-3 text-center">{err}</p>}<button onClick={go} className="w-full bg-white text-brand-600 py-3 rounded-xl font-bold">Ingresar</button></div></div>
+};
+
+const Agenda=({user})=>{
+    const[apps,setApps]=useState([]);const[form,setForm]=useState({fecha:'',hora:'',paciente:'',tratamiento:'',notas:''});const[pats,setPats]=useState([]);const[editId,setEditId]=useState(null);const[search,setSearch]=useState('');
+    useEffect(()=>{S.getApps().then(setApps);S.getPatients().then(setPats)},[]);
+    const save=async()=>{if(!form.fecha||!form.hora||!form.paciente)return alert('Complete campos');const a=editId?{id:editId,...form}:form;await S.saveApp(a);setForm({fecha:'',hora:'',paciente:'',tratamiento:'',notas:''});setEditId(null);setApps(await S.getApps());alert('Guardado')};
+    const today=new Date().toISOString().split('T')[0];
+    const filt=apps.filter(a=>a.paciente.toLowerCase().includes(search.toLowerCase())||a.tratamiento?.toLowerCase().includes(search.toLowerCase()));
+    return<div className="space-y-4 animate-fade-in"><div className="bg-white p-4 rounded-xl border"><h3 className="font-bold text-xs uppercase text-brand-600 mb-3">{editId?'Editar':'Nueva'} Cita</h3><div className="space-y-2"><input type="date" value={form.fecha} onChange={e=>setForm({...form,fecha:e.target.value})} className="w-full p-2.5 border rounded-lg text-sm"/><input type="time" value={form.hora} onChange={e=>setForm({...form,hora:e.target.value})} className="w-full p-2.5 border rounded-lg text-sm"/><select value={form.paciente} onChange={e=>setForm({...form,paciente:e.target.value})} className="w-full p-2.5 border rounded-lg text-sm font-medium"><option value="">Seleccionar paciente</option>{pats.map(p=><option key={p.id} value={p.nombre}>{p.nombre}</option>)}</select><input placeholder="Tratamiento" value={form.tratamiento} onChange={e=>setForm({...form,tratamiento:e.target.value})} className="w-full p-2.5 border rounded-lg text-sm"/><textarea placeholder="Notas" value={form.notas} onChange={e=>setForm({...form,notas:e.target.value})} rows="2" className="w-full p-2.5 border rounded-lg text-sm resize-none"></textarea><button onClick={save} className="w-full bg-brand-600 text-white py-2.5 rounded-xl font-bold text-sm">Guardar</button>{editId&&<button onClick={()=>{setEditId(null);setForm({fecha:'',hora:'',paciente:'',tratamiento:'',notas:''})}} className="w-full bg-gray-200 text-gray-600 py-2 rounded-xl font-bold text-sm">Cancelar</button>}</div></div><div className="relative"><input placeholder="Buscar citas..." value={search} onChange={e=>setSearch(e.target.value)} className="w-full p-3 pl-10 border rounded-xl text-sm"/><Search className="absolute left-3 top-3.5 text-gray-400" size={16}/></div><div className="space-y-2">{filt.map(a=><div key={a.id} className={`bg-white p-4 rounded-xl border-l-4 ${a.fecha===today?'border-brand-500 bg-brand-50':'border-gray-300'}`}><div className="flex justify-between items-start mb-2"><div><p className="font-bold text-sm">{a.paciente}</p><p className="text-xs text-gray-500">{a.tratamiento}</p></div><div className="flex gap-1"><button onClick={()=>{setEditId(a.id);setForm({fecha:a.fecha,hora:a.hora,paciente:a.paciente,tratamiento:a.tratamiento,notas:a.notas||''})}} className="p-1.5 text-brand-500"><Edit2 size={14}/></button><button onClick={async()=>{if(confirm('¿Eliminar?')){await S.delApp(a.id);setApps(await S.getApps())}}} className="p-1.5 text-red-400"><Trash2 size={14}/></button></div></div><div className="flex items-center gap-3 text-xs text-gray-600"><span>📅 {new Date(a.fecha+'T12:00').toLocaleDateString('es')}</span><span>🕐 {a.hora}</span></div>{a.notas&&<p className="text-xs text-gray-500 mt-2 italic">{a.notas}</p>}</div>)}</div></div>
+};
+
+const Patients=({user,onHist,onMed})=>{
+    const[pats,setPats]=useState([]);const[form,setForm]=useState({nombre:'',telefono:'',email:'',direccion:'',fecha_nac:'',notas:''});const[editId,setEditId]=useState(null);const[search,setSearch]=useState('');const[view,setView]=useState(null);
+    useEffect(()=>{S.getPatients().then(setPats)},[]);
+    const save=async()=>{if(!form.nombre)return alert('Ingrese nombre');const p=editId?{id:editId,...form}:form;await S.savePatient(p);setForm({nombre:'',telefono:'',email:'',direccion:'',fecha_nac:'',notas:''});setEditId(null);setPats(await S.getPatients());alert('Guardado')};
+    const filt=pats.filter(p=>p.nombre.toLowerCase().includes(search.toLowerCase())||p.telefono?.includes(search));
+    return<div className="space-y-4 animate-fade-in">{view&&<div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4"><div className="bg-white w-full max-w-md rounded-xl p-5 max-h-[80vh] overflow-auto"><div className="flex justify-between items-center mb-4"><h3 className="font-bold text-brand-600">Detalle Paciente</h3><button onClick={()=>setView(null)} className="p-1 text-gray-400"><X size={20}/></button></div><div className="space-y-3"><div><p className="text-xs text-gray-500">Nombre</p><p className="font-bold">{view.nombre}</p></div>{view.telefono&&<div><p className="text-xs text-gray-500">Teléfono</p><p className="font-bold">{view.telefono}</p></div>}{view.email&&<div><p className="text-xs text-gray-500">Email</p><p className="font-bold">{view.email}</p></div>}{view.direccion&&<div><p className="text-xs text-gray-500">Dirección</p><p className="font-bold">{view.direccion}</p></div>}{view.fecha_nac&&<div><p className="text-xs text-gray-500">Fecha Nac.</p><p className="font-bold">{new Date(view.fecha_nac+'T12:00').toLocaleDateString('es')}</p></div>}{view.notas&&<div><p className="text-xs text-gray-500">Notas</p><p className="text-sm">{view.notas}</p></div>}</div><div className="flex gap-2 mt-6"><button onClick={()=>{setView(null);onMed(view.id)}} className="flex-1 bg-pink-500 text-white py-2.5 rounded-lg font-bold text-sm flex items-center justify-center gap-2"><FileHeart size={16}/>Ficha</button><button onClick={()=>{setView(null);onHist(view.id)}} className="flex-1 bg-indigo-500 text-white py-2.5 rounded-lg font-bold text-sm flex items-center justify-center gap-2"><FileText size={16}/>Historia</button></div></div></div>}<div className="bg-white p-4 rounded-xl border"><h3 className="font-bold text-xs uppercase text-brand-600 mb-3">{editId?'Editar':'Nuevo'} Paciente</h3><div className="space-y-2"><input placeholder="Nombre completo" value={form.nombre} onChange={e=>setForm({...form,nombre:e.target.value})} className="w-full p-2.5 border rounded-lg text-sm"/><input placeholder="Teléfono" value={form.telefono} onChange={e=>setForm({...form,telefono:e.target.value})} className="w-full p-2.5 border rounded-lg text-sm"/><input placeholder="Email" value={form.email} onChange={e=>setForm({...form,email:e.target.value})} className="w-full p-2.5 border rounded-lg text-sm"/><input placeholder="Dirección" value={form.direccion} onChange={e=>setForm({...form,direccion:e.target.value})} className="w-full p-2.5 border rounded-lg text-sm"/><input type="date" placeholder="Fecha Nacimiento" value={form.fecha_nac} onChange={e=>setForm({...form,fecha_nac:e.target.value})} className="w-full p-2.5 border rounded-lg text-sm"/><textarea placeholder="Notas" value={form.notas} onChange={e=>setForm({...form,notas:e.target.value})} rows="2" className="w-full p-2.5 border rounded-lg text-sm resize-none"></textarea><button onClick={save} className="w-full bg-brand-600 text-white py-2.5 rounded-xl font-bold text-sm">Guardar</button>{editId&&<button onClick={()=>{setEditId(null);setForm({nombre:'',telefono:'',email:'',direccion:'',fecha_nac:'',notas:''})}} className="w-full bg-gray-200 text-gray-600 py-2 rounded-xl font-bold text-sm">Cancelar</button>}</div></div><div className="relative"><input placeholder="Buscar pacientes..." value={search} onChange={e=>setSearch(e.target.value)} className="w-full p-3 pl-10 border rounded-xl text-sm"/><Search className="absolute left-3 top-3.5 text-gray-400" size={16}/></div><div className="space-y-2">{filt.map(p=><PatCard key={p.id} p={p} onView={setView} onEdit={()=>{setEditId(p.id);setForm({nombre:p.nombre,telefono:p.telefono||'',email:p.email||'',direccion:p.direccion||'',fecha_nac:p.fecha_nac||'',notas:p.notas||''})}} onDel={async()=>{if(confirm('¿Eliminar?')){await S.delPatient(p.id);setPats(await S.getPatients())}}} onHist={()=>onHist(p.id)} onMed={()=>onMed(p.id)}/>)}</div></div>
+};
+
+const PatCard=({p,onView,onEdit,onDel,onHist,onMed})=>{
+    const[alert,setAlert]=useState(false);
+    useEffect(()=>{S.hasCond(p.id).then(setAlert)},[p.id]);
+    return<div className={`bg-white p-4 rounded-xl border ${alert?'medical-alert':''}`} onClick={()=>onView(p)}><div className="flex justify-between items-start"><div className="flex-1"><p className="font-bold text-sm flex items-center gap-2">{p.nombre}{alert&&<AlertTriangle size={14} className="text-pink-500"/>}</p><p className="text-xs text-gray-500">{p.telefono}</p></div><div className="flex gap-1" onClick={e=>e.stopPropagation()}><button onClick={onEdit} className="p-1.5 text-brand-500"><Edit2 size={14}/></button><button onClick={onDel} className="p-1.5 text-red-400"><Trash2 size={14}/></button></div></div><div className="flex gap-2 mt-3" onClick={e=>e.stopPropagation()}><button onClick={onMed} className="flex-1 bg-pink-100 text-pink-600 py-1.5 rounded-lg text-xs font-bold flex items-center justify-center gap-1"><FileHeart size={12}/>Ficha</button><button onClick={onHist} className="flex-1 bg-indigo-100 text-indigo-600 py-1.5 rounded-lg text-xs font-bold flex items-center justify-center gap-1"><FileText size={12}/>Historia</button></div></div>
+};
+
+const Medical=({user,initId})=>{
+    const[pid,setPid]=useState(initId||null);const[pats,setPats]=useState([]);const[med,setMed]=useState(null);const[form,setForm]=useState({});
+    useEffect(()=>{S.getPatients().then(setPats)},[]);
+    useEffect(()=>{if(pid){S.getMed(pid).then(m=>{if(m){setMed(m);setForm(m)}else{setMed(null);setForm({paciente_id:pid,alergias:[],alergias_medicamentos:[],medicacion_actual:[],antecedentes_personales:{diabetes:false,hipertension:false,cardiopatia:false,hepatitis:false,vih:false,cancer:false,embarazo:false,otros:''},antecedentes_odontologicos:'',habitos:'',observaciones:''})}})}else{setMed(null);setForm({})}},[pid]);
+    const save=async()=>{if(!pid)return alert('Seleccione paciente');await S.saveMed({...form,paciente_id:pid});setMed(await S.getMed(pid));alert('Guardado')};
+    const pat=pats.find(p=>p.id===pid);
+    return<div className="space-y-4 animate-fade-in"><select value={pid||''} onChange={e=>setPid(Number(e.target.value))} className="w-full p-3 border rounded-xl text-sm font-bold bg-white"><option value="">Seleccionar Paciente</option>{pats.map(p=><option key={p.id} value={p.id}>{p.nombre}</option>)}</select>{pid&&pat&&<div className="bg-gradient-to-r from-pink-500 to-rose-500 p-4 rounded-xl text-white"><p className="text-xs opacity-80">Paciente</p><p className="font-bold text-lg">{pat.nombre}</p></div>}{pid&&<div className="bg-white p-4 rounded-xl border space-y-4"><h3 className="font-bold text-xs uppercase text-pink-600 mb-3">Ficha Médica</h3><div><label className="block text-xs font-bold text-gray-600 mb-1">Alergias</label><textarea value={form.alergias?.join(', ')||''} onChange={e=>setForm({...form,alergias:e.target.value.split(',').map(s=>s.trim()).filter(Boolean)})} placeholder="Ej: Polen, Ácaros" className="w-full p-2.5 border rounded-lg text-sm" rows="2"></textarea></div><div><label className="block text-xs font-bold text-gray-600 mb-1">Alergias a Medicamentos</label><textarea value={form.alergias_medicamentos?.join(', ')||''} onChange={e=>setForm({...form,alergias_medicamentos:e.target.value.split(',').map(s=>s.trim()).filter(Boolean)})} placeholder="Ej: Penicilina, Aspirina" className="w-full p-2.5 border rounded-lg text-sm" rows="2"></textarea></div><div><label className="block text-xs font-bold text-gray-600 mb-1">Medicación Actual</label><textarea value={form.medicacion_actual?.join(', ')||''} onChange={e=>setForm({...form,medicacion_actual:e.target.value.split(',').map(s=>s.trim()).filter(Boolean)})} placeholder="Ej: Omeprazol 20mg, Atorvastatina" className="w-full p-2.5 border rounded-lg text-sm" rows="2"></textarea></div><div><label className="block text-xs font-bold text-gray-600 mb-2">Antecedentes Personales</label><div className="space-y-2">{Object.entries({diabetes:'Diabetes',hipertension:'Hipertensión',cardiopatia:'Cardiopatía',hepatitis:'Hepatitis',vih:'VIH',cancer:'Cáncer',embarazo:'Embarazo'}).map(([k,v])=><label key={k} className="flex items-center gap-2"><input type="checkbox" checked={form.antecedentes_personales?.[k]||false} onChange={e=>setForm({...form,antecedentes_personales:{...form.antecedentes_personales,[k]:e.target.checked}})} className="w-4 h-4"/><span className="text-sm">{v}</span></label>)}<input placeholder="Otros" value={form.antecedentes_personales?.otros||''} onChange={e=>setForm({...form,antecedentes_personales:{...form.antecedentes_personales,otros:e.target.value}})} className="w-full p-2 border rounded-lg text-sm mt-2"/></div></div><div><label className="block text-xs font-bold text-gray-600 mb-1">Antecedentes Odontológicos</label><textarea value={form.antecedentes_odontologicos||''} onChange={e=>setForm({...form,antecedentes_odontologicos:e.target.value})} placeholder="Tratamientos previos, cirugías..." className="w-full p-2.5 border rounded-lg text-sm" rows="3"></textarea></div><div><label className="block text-xs font-bold text-gray-600 mb-1">Hábitos</label><textarea value={form.habitos||''} onChange={e=>setForm({...form,habitos:e.target.value})} placeholder="Tabaco, alcohol, bruxismo..." className="w-full p-2.5 border rounded-lg text-sm" rows="2"></textarea></div><div><label className="block text-xs font-bold text-gray-600 mb-1">Observaciones</label><textarea value={form.observaciones||''} onChange={e=>setForm({...form,observaciones:e.target.value})} className="w-full p-2.5 border rounded-lg text-sm" rows="3"></textarea></div><button onClick={save} className="w-full bg-pink-500 text-white py-3 rounded-xl font-bold">Guardar Ficha Médica</button></div>}</div>
+};
+
+const History=({user,initId})=>{
+    const[pid,setPid]=useState(initId||null);const[pats,setPats]=useState([]);const[hist,setHist]=useState([]);const[imgs,setImgs]=useState([]);const[form,setForm]=useState({tratamiento:'',diagnostico:'',notas:'',precio:''});const[imgForm,setImgForm]=useState({descripcion:'',url:''});const fileRef=useRef();
+    useEffect(()=>{S.getPatients().then(setPats)},[]);
+    useEffect(()=>{if(pid){S.getHist(pid).then(setHist);S.getImgs(pid).then(setImgs)}else{setHist([]);setImgs([])}},[pid]);
+    const saveH=async()=>{if(!pid||!form.tratamiento)return alert('Complete campos');await S.saveHist({paciente_id:pid,fecha:new Date().toISOString().split('T')[0],tratamiento:form.tratamiento,diagnostico:form.diagnostico,notas:form.notas,precio:form.precio,usuario:user.name});setForm({tratamiento:'',diagnostico:'',notas:'',precio:''});setHist(await S.getHist(pid));alert('Guardado')};
+    const saveI=async()=>{if(!pid||!imgForm.url)return alert('Complete campos');await S.saveImg({paciente_id:pid,fecha:new Date().toISOString().split('T')[0],descripcion:imgForm.descripcion,url:imgForm.url});setImgForm({descripcion:'',url:''});setImgs(await S.getImgs(pid));alert('Imagen guardada')};
+    const handleFile=e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=ev=>setImgForm({...imgForm,url:ev.target.result});r.readAsDataURL(f)};
+    const print=()=>window.print();
+    const pat=pats.find(p=>p.id===pid);
+    return<div className="space-y-4 animate-fade-in"><select value={pid||''} onChange={e=>setPid(Number(e.target.value))} className="w-full p-3 border rounded-xl text-sm font-bold bg-white no-print"><option value="">Seleccionar Paciente</option>{pats.map(p=><option key={p.id} value={p.id}>{p.nombre}</option>)}</select>{pid&&pat&&<div className="bg-gradient-to-r from-indigo-500 to-purple-500 p-4 rounded-xl text-white no-print"><div className="flex justify-between items-center"><div><p className="text-xs opacity-80">Historia de</p><p className="font-bold text-lg">{pat.nombre}</p></div><button onClick={print} className="p-2 bg-white/20 rounded-lg"><Printer size={18}/></button></div></div>}{pid&&<div className="bg-white p-4 rounded-xl border no-print"><h3 className="font-bold text-xs uppercase text-indigo-600 mb-3">Nueva Consulta</h3><div className="space-y-2"><input placeholder="Tratamiento realizado" value={form.tratamiento} onChange={e=>setForm({...form,tratamiento:e.target.value})} className="w-full p-2.5 border rounded-lg text-sm"/><input placeholder="Diagnóstico" value={form.diagnostico} onChange={e=>setForm({...form,diagnostico:e.target.value})} className="w-full p-2.5 border rounded-lg text-sm"/><textarea placeholder="Notas adicionales" value={form.notas} onChange={e=>setForm({...form,notas:e.target.value})} rows="2" className="w-full p-2.5 border rounded-lg text-sm resize-none"></textarea><input type="number" placeholder="Precio" value={form.precio} onChange={e=>setForm({...form,precio:e.target.value})} className="w-full p-2.5 border rounded-lg text-sm"/><button onClick={saveH} className="w-full bg-indigo-600 text-white py-2.5 rounded-xl font-bold text-sm">Guardar Consulta</button></div></div>}{pid&&<div className="bg-white p-4 rounded-xl border no-print"><h3 className="font-bold text-xs uppercase text-purple-600 mb-3">Subir Imagen</h3><div className="space-y-2"><input type="file" ref={fileRef} accept="image/*" onChange={handleFile} className="hidden"/><button onClick={()=>fileRef.current.click()} className="w-full border-2 border-dashed border-gray-300 rounded-lg p-4 text-sm text-gray-500 hover:border-purple-400"><ImageIcon className="mx-auto mb-2" size={24}/>Seleccionar imagen</button>{imgForm.url&&<img src={imgForm.url} className="w-full rounded-lg"/>}<input placeholder="Descripción (opcional)" value={imgForm.descripcion} onChange={e=>setImgForm({...imgForm,descripcion:e.target.value})} className="w-full p-2.5 border rounded-lg text-sm"/><button onClick={saveI} disabled={!imgForm.url} className="w-full bg-purple-600 text-white py-2.5 rounded-xl font-bold text-sm disabled:opacity-50">Guardar Imagen</button></div></div>}{imgs.length>0&&<div><h4 className="font-bold text-sm mb-3">Imágenes</h4><div className="grid grid-cols-2 gap-3">{imgs.map(i=><div key={i.id} className="relative bg-white rounded-lg overflow-hidden border"><img src={i.url} className="w-full h-32 object-cover"/><div className="p-2"><p className="text-[10px] text-gray-500">{new Date(i.fecha+'T12:00').toLocaleDateString('es')}</p>{i.descripcion&&<p className="text-xs mt-1">{i.descripcion}</p>}</div><button onClick={async()=>{if(confirm('¿Eliminar?')){await S.delImg(i.id);setImgs(await S.getImgs(pid))}}} className="absolute top-1 right-1 p-1 bg-red-500 text-white rounded no-print"><Trash size={12}/></button></div>)}</div></div>}{hist.length>0&&<div><h4 className="font-bold text-sm mb-3">Historial de Consultas</h4><div className="space-y-3">{hist.map(h=><div key={h.id} className="bg-white p-4 rounded-xl border"><div className="flex justify-between items-start mb-2"><div><p className="text-xs text-gray-500">{new Date(h.fecha+'T12:00').toLocaleDateString('es')}</p><p className="font-bold text-sm mt-1">{h.tratamiento}</p></div>{h.precio&&<p className="font-bold text-indigo-600">${h.precio}</p>}</div>{h.diagnostico&&<p className="text-xs text-gray-600 mb-1"><strong>Dx:</strong> {h.diagnostico}</p>}{h.notas&&<p className="text-xs text-gray-500 italic">{h.notas}</p>}<p className="text-[10px] text-gray-400 mt-2">Por: {h.usuario}</p></div>)}</div></div>}</div>
+};
+
+const Admin=({user,online})=>{
+    const[tab,setTab]=useState('backup');const isAdmin=user.role===Role.ADMIN;
+    const[users,setUsers]=useState([]);const[uForm,setUForm]=useState({name:'',username:'',password:'',role:Role.USUARIO});const[editId,setEditId]=useState(null);
+    const fileRef=useRef();
+
+    useEffect(()=>{if(tab==='users')S.getUsers().then(setUsers)},[tab]);
+    const saveUser=async()=>{if(!uForm.name||!uForm.username||!uForm.password)return alert('Complete campos');if(editId)await S.saveUser({id:editId,...uForm});else await S.saveUser(uForm);setUForm({name:'',username:'',password:'',role:Role.USUARIO});setEditId(null);setUsers(await S.getUsers());alert('Guardado')};
+
+    return<div className="space-y-4 animate-fade-in">
+        <div className="flex gap-2 overflow-x-auto pb-2">{isAdmin&&<button onClick={()=>setTab('users')} className={`px-4 py-2 rounded-lg text-xs font-bold whitespace-nowrap ${tab==='users'?'bg-brand-600 text-white':'bg-white border text-gray-500'}`}>Usuarios</button>}<button onClick={()=>setTab('backup')} className={`px-4 py-2 rounded-lg text-xs font-bold whitespace-nowrap ${tab==='backup'?'bg-emerald-600 text-white':'bg-white border text-gray-500'}`}>Backup</button><button onClick={()=>setTab('info')} className={`px-4 py-2 rounded-lg text-xs font-bold whitespace-nowrap ${tab==='info'?'bg-indigo-600 text-white':'bg-white border text-gray-500'}`}>Sistema</button></div>
+        
+        {tab==='users'&&isAdmin&&<div className="space-y-4">
+            <div className="bg-white p-4 rounded-xl border">
+                <h3 className="font-bold text-xs uppercase text-brand-600 mb-3">{editId?'Editar':'Nuevo'} Usuario</h3>
+                <div className="space-y-2">
+                    <input placeholder="Nombre" value={uForm.name} onChange={e=>setUForm({...uForm,name:e.target.value})} className="w-full p-2.5 border rounded-lg text-sm"/>
+                    <input placeholder="Usuario" value={uForm.username} onChange={e=>setUForm({...uForm,username:e.target.value})} className="w-full p-2.5 border rounded-lg text-sm"/>
+                    <input placeholder="Contraseña" value={uForm.password} onChange={e=>setUForm({...uForm,password:e.target.value})} className="w-full p-2.5 border rounded-lg text-sm"/>
+                    <select value={uForm.role} onChange={e=>setUForm({...uForm,role:e.target.value})} className="w-full p-2.5 border rounded-lg text-sm font-medium"><option value={Role.USUARIO}>Usuario</option><option value={Role.ODONTOLOGO}>Odontólogo</option><option value={Role.ADMIN}>Administrador</option></select>
+                    <button onClick={saveUser} className="w-full bg-brand-600 text-white py-2.5 rounded-xl font-bold text-sm">Guardar</button>
+                    {editId&&<button onClick={()=>{setEditId(null);setUForm({name:'',username:'',password:'',role:Role.USUARIO})}} className="w-full bg-gray-200 text-gray-600 py-2 rounded-xl font-bold text-sm">Cancelar</button>}
+                </div>
+            </div>
+            <div className="bg-white rounded-xl border overflow-hidden divide-y">{users.map(u=><div key={u.id} className="p-3 flex justify-between items-center"><div><p className="font-bold text-sm">{u.name}</p><p className="text-[10px] text-gray-400">@{u.username} • {u.role}</p></div><div className="flex gap-1"><button onClick={()=>{setEditId(u.id);setUForm({name:u.name,username:u.username,password:u.password,role:u.role})}} className="p-2 text-brand-500"><Edit2 size={14}/></button><button onClick={async()=>{if(u.id===1)return alert('No se puede eliminar Admin');if(confirm('¿Eliminar?')){await S.delUser(u.id);setUsers(await S.getUsers())}}} className="p-2 text-red-400"><Trash2 size={14}/></button></div></div>)}</div>
+        </div>}
+
+        {tab==='backup'&&<div className="space-y-4">
+            <div className="bg-white p-6 rounded-xl border text-center"><Download size={32} className="mx-auto text-brand-600 mb-2"/><h4 className="font-bold mb-2">Exportar</h4><button onClick={async()=>{const d=await S.export();const b=new Blob([d],{type:'application/json'});const u=URL.createObjectURL(b);const a=document.createElement('a');a.href=u;a.download='ArteDental_'+new Date().toISOString().split('T')[0]+'.json';a.click()}} className="w-full bg-brand-600 text-white py-3 rounded-xl font-bold text-sm">Descargar</button></div>
+            <div className="bg-white p-6 rounded-xl border text-center"><Upload size={32} className="mx-auto text-emerald-600 mb-2"/><h4 className="font-bold mb-2">Importar</h4><input type="file" ref={fileRef} accept=".json" className="hidden" onChange={async e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=async ev=>{if(await S.import(ev.target.result)){alert('Importado');window.location.reload()}else alert('Error')};r.readAsText(f)}}/><button onClick={()=>fileRef.current.click()} className="w-full bg-emerald-600 text-white py-3 rounded-xl font-bold text-sm">Cargar</button></div>
+        </div>}
+
+        {tab==='info'&&<div className="bg-gradient-to-br from-indigo-500 to-purple-600 p-6 rounded-xl text-white text-center"><Cloud size={40} className="mx-auto mb-2"/><h4 className="text-lg font-bold mb-2">Sistema en la Nube</h4><p className="text-white/80 text-sm mb-3">Supabase Database</p><div className={`inline-flex items-center gap-2 px-4 py-2 rounded-full ${online?'bg-emerald-500':'bg-red-500'}`}>{online?<><Wifi size={16}/>Conectado</>:<><WifiOff size={16}/>Offline</>}</div></div>}
+    </div>
+};
+
+const App=()=>{
+    const[user,setUser]=useState(null);const[tab,setTab]=useState('agenda');const[pid,setPid]=useState(null);
+    const[loading,setLoading]=useState(true);const[online,setOnline]=useState(false);const[showPass,setShowPass]=useState(false);const[menuOpen,setMenuOpen]=useState(false);
+
+    useEffect(()=>{S.init().then(ok=>{setOnline(ok);setLoading(false)});const i=setInterval(async()=>setOnline(await DB.check()),30000);return()=>clearInterval(i)},[]);
+    const logout=async()=>{await DB.check();setUser(null)};
+
+    if(loading)return<div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-br from-brand-600 to-indigo-900 text-white safe-top safe-bottom"><RefreshCw className="animate-spin mb-3" size={40}/><p className="font-bold">Conectando...</p></div>;
+    if(!user)return<Login onLogin={setUser} online={online}/>;
+
+    const tabs=[{id:'agenda',label:'Agenda',icon:Calendar},{id:'pacientes',label:'Pacientes',icon:Users},{id:'ficha',label:'Ficha',icon:FileHeart},{id:'historia',label:'Historia',icon:FileText},{id:'admin',label:'Sistema',icon:Shield}];
+
+    return<div className="min-h-screen flex flex-col bg-slate-50">
+        {showPass&&<div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4"><div className="bg-white w-full max-w-xs rounded-xl p-5"><h3 className="font-bold text-brand-600 mb-3">Cambiar Contraseña</h3><input id="np" type="password" placeholder="Nueva contraseña" className="w-full p-2.5 border rounded-lg mb-3"/><div className="flex gap-2"><button onClick={async()=>{const np=document.getElementById('np').value;if(np.length<3)return alert('Muy corta');await S.saveUser({...user,password:np});setUser({...user,password:np});setShowPass(false);alert('OK')}} className="flex-1 bg-brand-600 text-white py-2 rounded-lg font-bold text-sm">Guardar</button><button onClick={()=>setShowPass(false)} className="flex-1 bg-gray-200 text-gray-600 py-2 rounded-lg font-bold text-sm">Cancelar</button></div></div></div>}
+        
+        <header className="bg-brand-600 text-white p-3 safe-top no-print">
+            <div className="flex justify-between items-center">
+                <div className="flex items-center gap-2"><span className="text-xl">🦷</span><span className="font-bold">Arte Dental</span></div>
+                <div className="flex items-center gap-2">
+                    <Status on={online}/>
+                    <button onClick={()=>setShowPass(true)} className="p-2 bg-brand-700 rounded-lg"><Key size={16}/></button>
+                    <button onClick={logout} className="p-2 bg-brand-700 rounded-lg"><LogOut size={16}/></button>
+                </div>
+            </div>
+        </header>
+
+        <nav className="bg-white border-b px-2 py-1 flex gap-1 overflow-x-auto scrollbar-hide no-print">
+            {tabs.map(t=><button key={t.id} onClick={()=>{setTab(t.id);setPid(null)}} className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold whitespace-nowrap ${tab===t.id?'bg-brand-100 text-brand-600':'text-gray-500'}`}><t.icon size={14}/>{t.label}</button>)}
+        </nav>
+
+        <main className="flex-1 p-3 overflow-auto safe-bottom">
+            {tab==='agenda'&&<Agenda user={user}/>}
+            {tab==='pacientes'&&<Patients user={user} onHist={id=>{setPid(id);setTab('historia')}} onMed={id=>{setPid(id);setTab('ficha')}}/>}
+            {tab==='ficha'&&<Medical user={user} initId={pid}/>}
+            {tab==='historia'&&<History user={user} initId={pid}/>}
+            {tab==='admin'&&<Admin user={user} online={online}/>}
+        </main>
+
+        <footer className="p-2 text-center text-[10px] text-gray-400 no-print safe-bottom">Arte Dental © 2025 • {online?'🟢':'🔴'}</footer>
+    </div>
+};
+
+createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
