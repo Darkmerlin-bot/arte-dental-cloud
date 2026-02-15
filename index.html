@@ -88,8 +88,8 @@ const Modal=({src,onClose})=><div className="fixed inset-0 bg-black/90 flex item
 
 const Login=({onLogin,online})=>{
     const[u,setU]=useState('');const[p,setP]=useState('');const[err,setErr]=useState('');const[loading,setLoading]=useState(false);
-    const submit=async e=>{e.preventDefault();setLoading(true);setErr('');const users=await S.getUsers();const user=users.find(x=>(x.username||'').toLowerCase()===u.toLowerCase()&&x.password===p);setLoading(false);if(user)onLogin(user);else setErr('Credenciales incorrectas')};
-    return<div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-brand-600 to-indigo-900 p-4 safe-top safe-bottom"><div className="w-full max-w-sm bg-white rounded-2xl shadow-2xl p-6 text-center"><Cloud size={40} className="mx-auto text-brand-600 mb-2"/><h1 className="text-2xl font-bold text-brand-600 mb-1">🦷 Arte Dental</h1><p className="text-[10px] text-gray-400 mb-2">Sistema en la Nube</p><div className="mb-4 flex justify-center"><Status on={online}/></div><form onSubmit={submit} className="space-y-3"><input type="text" value={u} onChange={e=>setU(e.target.value)} className="w-full p-3 border rounded-xl font-medium" placeholder="Usuario"/><input type="password" value={p} onChange={e=>setP(e.target.value)} className="w-full p-3 border rounded-xl font-medium" placeholder="Contraseña"/>{err&&<p className="text-red-500 text-xs font-medium">{err}</p>}<button type="submit" disabled={loading||!online} className="w-full bg-brand-600 text-white font-bold py-3 rounded-xl disabled:opacity-50">{loading?'Conectando...':online?'Ingresar':'Sin conexión'}</button></form></div></div>
+    const submit=async e=>{e.preventDefault();if(!u||!p)return setErr('Complete todos los campos');setLoading(true);setErr('');const email=u.includes('@')?u:`${u}@local.com`;try{const{data,error}=await supabase.auth.signInWithPassword({email,password:p});if(error)throw error;const users=await S.getUsers();const user=users.find(x=>x.email===email);if(user){onLogin(user)}else{await supabase.auth.signOut();setErr('Usuario no encontrado en el sistema')}}catch(e){setErr('Credenciales incorrectas')}finally{setLoading(false)}};
+    return<div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-brand-600 to-indigo-900 p-4 safe-top safe-bottom"><div className="w-full max-w-sm bg-white rounded-2xl shadow-2xl p-6 text-center"><Cloud size={40} className="mx-auto text-brand-600 mb-2"/><h1 className="text-2xl font-bold text-brand-600 mb-1">🦷 Arte Dental</h1><p className="text-[10px] text-gray-400 mb-2">Sistema en la Nube</p><div className="mb-4 flex justify-center"><Status on={online}/></div><form onSubmit={submit} className="space-y-3"><input type="text" value={u} onChange={e=>setU(e.target.value)} className="w-full p-3 border rounded-xl font-medium" placeholder="Usuario" autoComplete="username"/><input type="password" value={p} onChange={e=>setP(e.target.value)} className="w-full p-3 border rounded-xl font-medium" placeholder="Contraseña" autoComplete="current-password"/>{err&&<p className="text-red-500 text-xs font-medium">{err}</p>}<button type="submit" disabled={loading||!online} className="w-full bg-brand-600 text-white font-bold py-3 rounded-xl disabled:opacity-50">{loading?'Conectando...':online?'Ingresar':'Sin conexión'}</button></form></div></div>
 };
 
 const Agenda=({user})=>{
@@ -154,21 +154,22 @@ const Agenda=({user})=>{
 const Patients=({user,onHist,onMed})=>{
     const[pts,setPts]=useState([]);const[search,setSearch]=useState('');
     const[form,setForm]=useState({nombre:'',ci:'',telefono:'',email:''});const[editId,setEditId]=useState(null);
-    const[cond,setCond]=useState({});
+    const[cond,setCond]=useState({});const[saving,setSaving]=useState(false);
 
     useEffect(()=>{load()},[]);
     const load=async()=>{const p=await S.getPatients();setPts(p);const c={};for(const pt of p)c[pt.id]=await S.hasCond(pt.id);setCond(c)};
-    const submit=async()=>{if(!form.nombre||!form.ci)return alert('Nombre y CI obligatorios');if(editId)await S.savePatient({id:editId,...form});else await S.savePatient(form);setForm({nombre:'',ci:'',telefono:'',email:''});setEditId(null);load()};
+    const submit=async()=>{if(!form.nombre||!form.ci)return alert('Nombre y CI obligatorios');const ciDuplicate=pts.find(p=>p.ci===form.ci&&(!editId||p.id!==editId));if(ciDuplicate)return alert(`Ya existe un paciente con CI ${form.ci}:\n${ciDuplicate.nombre}`);setSaving(true);try{if(editId)await S.savePatient({id:editId,...form});else await S.savePatient(form);setForm({nombre:'',ci:'',telefono:'',email:''});setEditId(null);await load()}finally{setSaving(false)}};
+    const delPatient=async(p)=>{if(!confirm(`¿Eliminar paciente ${p.nombre}?`))return;if(!confirm('¿Está seguro? Esta acción no se puede deshacer'))return;await S.delPatient(p.id);load()};
 
     return<div className="space-y-4 animate-fade-in">
         <div className="bg-white p-4 rounded-xl border">
             <h2 className="font-bold mb-3 text-brand-600 uppercase text-xs"><UserPlus size={14} className="inline mr-1"/>{editId?'Editar':'Nuevo'}</h2>
             <div className="grid grid-cols-2 gap-2">
-                <input placeholder="Nombre *" value={form.nombre} onChange={e=>setForm({...form,nombre:e.target.value})} className="p-2.5 border rounded-lg text-sm col-span-2"/>
-                <input placeholder="CI *" value={form.ci} onChange={e=>setForm({...form,ci:e.target.value})} className="p-2.5 border rounded-lg text-sm"/>
-                <input placeholder="Teléfono" value={form.telefono} onChange={e=>setForm({...form,telefono:e.target.value})} className="p-2.5 border rounded-lg text-sm"/>
+                <input placeholder="Nombre *" value={form.nombre} onChange={e=>setForm({...form,nombre:e.target.value})} className="p-2.5 border rounded-lg text-sm col-span-2" disabled={saving}/>
+                <input placeholder="CI *" value={form.ci} onChange={e=>setForm({...form,ci:e.target.value.replace(/\D/g,'')})} className="p-2.5 border rounded-lg text-sm" disabled={saving}/>
+                <input placeholder="Teléfono" value={form.telefono} onChange={e=>setForm({...form,telefono:e.target.value})} className="p-2.5 border rounded-lg text-sm" disabled={saving}/>
             </div>
-            <div className="flex gap-2 mt-3"><button onClick={submit} className="flex-1 bg-brand-600 text-white py-2.5 rounded-xl font-bold text-sm">Guardar</button>{editId&&<button onClick={()=>{setEditId(null);setForm({nombre:'',ci:'',telefono:'',email:''})}} className="px-4 bg-gray-200 text-gray-600 py-2.5 rounded-xl font-bold text-sm">✕</button>}</div>
+            <div className="flex gap-2 mt-3"><button onClick={submit} disabled={saving} className="flex-1 bg-brand-600 text-white py-2.5 rounded-xl font-bold text-sm disabled:opacity-50">{saving?'Guardando...':'Guardar'}</button>{editId&&<button onClick={()=>{setEditId(null);setForm({nombre:'',ci:'',telefono:'',email:''})}} disabled={saving} className="px-4 bg-gray-200 text-gray-600 py-2.5 rounded-xl font-bold text-sm disabled:opacity-50">✕</button>}</div>
         </div>
         <div className="bg-white rounded-xl border overflow-hidden">
             <div className="p-3 border-b bg-gray-50"><div className="relative"><Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" size={14}/><input placeholder="Buscar..." value={search} onChange={e=>setSearch(e.target.value)} className="w-full pl-8 pr-3 py-2 border rounded-lg text-sm"/></div></div>
@@ -180,6 +181,7 @@ const Patients=({user,onHist,onMed})=>{
                             <button onClick={()=>{setEditId(p.id);setForm({nombre:p.nombre,ci:p.ci,telefono:p.telefono||'',email:p.email||''})}} className="p-2 text-brand-500"><Edit2 size={14}/></button>
                             <button onClick={()=>onMed(p.id)} className="p-2 text-pink-500"><FileHeart size={14}/></button>
                             <button onClick={()=>onHist(p.id)} className="p-2 text-brand-500"><FileText size={14}/></button>
+                            <button onClick={()=>delPatient(p)} className="p-2 text-red-500 hover:bg-red-50 rounded"><Trash2 size={14}/></button>
                         </div>
                     </div>
                 </div>)}
