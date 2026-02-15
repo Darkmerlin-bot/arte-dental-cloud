@@ -154,11 +154,13 @@ const Agenda=({user})=>{
 const Patients=({user,onHist,onMed})=>{
     const[pts,setPts]=useState([]);const[search,setSearch]=useState('');
     const[form,setForm]=useState({nombre:'',ci:'',telefono:'',email:''});const[editId,setEditId]=useState(null);
-    const[cond,setCond]=useState({});const[saving,setSaving]=useState(false);
+    const[cond,setCond]=useState({});const[saving,setSaving]=useState(false);const[ciDisplay,setCiDisplay]=useState('');
 
     useEffect(()=>{load()},[]);
     const load=async()=>{const p=await S.getPatients();setPts(p);const c={};for(const pt of p)c[pt.id]=await S.hasCond(pt.id);setCond(c)};
-    const submit=async()=>{if(!form.nombre||!form.ci)return alert('Nombre y CI obligatorios');const ciDuplicate=pts.find(p=>p.ci===form.ci&&(!editId||p.id!==editId));if(ciDuplicate)return alert(`Ya existe un paciente con CI ${form.ci}:\n${ciDuplicate.nombre}`);setSaving(true);try{if(editId)await S.savePatient({id:editId,...form});else await S.savePatient(form);setForm({nombre:'',ci:'',telefono:'',email:''});setEditId(null);await load()}finally{setSaving(false)}};
+    const formatCI=ci=>{if(!ci)return '';const nums=ci.replace(/\D/g,'');if(nums.length<=1)return nums;if(nums.length<=4)return nums.replace(/(\d{1})(\d{1,3})/,'$1.$2');if(nums.length<=7)return nums.replace(/(\d{1})(\d{3})(\d{1,3})/,'$1.$2.$3');return nums.replace(/(\d{1})(\d{3})(\d{3})(\d{1})/,'$1.$2.$3-$4').substring(0,12)};
+    const handleCIChange=e=>{const raw=e.target.value.replace(/\D/g,'').substring(0,8);setForm({...form,ci:raw});setCiDisplay(formatCI(raw))};
+    const submit=async()=>{if(!form.nombre||!form.ci)return alert('Nombre y CI obligatorios');const ciDuplicate=pts.find(p=>p.ci===form.ci&&(!editId||p.id!==editId));if(ciDuplicate)return alert(`Ya existe un paciente con CI ${formatCI(form.ci)}:\n${ciDuplicate.nombre}`);setSaving(true);try{if(editId)await S.savePatient({id:editId,...form});else await S.savePatient(form);setForm({nombre:'',ci:'',telefono:'',email:''});setCiDisplay('');setEditId(null);await load()}finally{setSaving(false)}};
     const delPatient=async(p)=>{if(!confirm(`¿Eliminar paciente ${p.nombre}?`))return;if(!confirm('¿Está seguro? Esta acción no se puede deshacer'))return;await S.delPatient(p.id);load()};
 
     return<div className="space-y-4 animate-fade-in">
@@ -166,19 +168,19 @@ const Patients=({user,onHist,onMed})=>{
             <h2 className="font-bold mb-3 text-brand-600 uppercase text-xs"><UserPlus size={14} className="inline mr-1"/>{editId?'Editar':'Nuevo'}</h2>
             <div className="grid grid-cols-2 gap-2">
                 <input placeholder="Nombre *" value={form.nombre} onChange={e=>setForm({...form,nombre:e.target.value})} className="p-2.5 border rounded-lg text-sm col-span-2" disabled={saving}/>
-                <input placeholder="CI *" value={form.ci} onChange={e=>setForm({...form,ci:e.target.value.replace(/\D/g,'')})} className="p-2.5 border rounded-lg text-sm" disabled={saving}/>
+                <input placeholder="CI * (ej: 2.555.555-3)" value={ciDisplay} onChange={handleCIChange} className="p-2.5 border rounded-lg text-sm" disabled={saving}/>
                 <input placeholder="Teléfono" value={form.telefono} onChange={e=>setForm({...form,telefono:e.target.value})} className="p-2.5 border rounded-lg text-sm" disabled={saving}/>
             </div>
-            <div className="flex gap-2 mt-3"><button onClick={submit} disabled={saving} className="flex-1 bg-brand-600 text-white py-2.5 rounded-xl font-bold text-sm disabled:opacity-50">{saving?'Guardando...':'Guardar'}</button>{editId&&<button onClick={()=>{setEditId(null);setForm({nombre:'',ci:'',telefono:'',email:''})}} disabled={saving} className="px-4 bg-gray-200 text-gray-600 py-2.5 rounded-xl font-bold text-sm disabled:opacity-50">✕</button>}</div>
+            <div className="flex gap-2 mt-3"><button onClick={submit} disabled={saving} className="flex-1 bg-brand-600 text-white py-2.5 rounded-xl font-bold text-sm disabled:opacity-50">{saving?'Guardando...':'Guardar'}</button>{editId&&<button onClick={()=>{setEditId(null);setForm({nombre:'',ci:'',telefono:'',email:''});setCiDisplay('')}} disabled={saving} className="px-4 bg-gray-200 text-gray-600 py-2.5 rounded-xl font-bold text-sm disabled:opacity-50">✕</button>}</div>
         </div>
         <div className="bg-white rounded-xl border overflow-hidden">
             <div className="p-3 border-b bg-gray-50"><div className="relative"><Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" size={14}/><input placeholder="Buscar..." value={search} onChange={e=>setSearch(e.target.value)} className="w-full pl-8 pr-3 py-2 border rounded-lg text-sm"/></div></div>
             <div className="divide-y max-h-[60vh] overflow-auto">
                 {pts.filter(p=>(p.nombre||'').toLowerCase().includes(search.toLowerCase())||(p.ci||'').includes(search)).map(p=><div key={p.id} className={`p-3 ${cond[p.id]?'medical-alert':''}`}>
                     <div className="flex justify-between items-center">
-                        <div><p className="font-bold text-sm">{p.nombre}{cond[p.id]&&<span className="ml-1 bg-pink-500 text-white text-[8px] px-1.5 py-0.5 rounded-full">⚠️</span>}</p><p className="text-[10px] text-gray-400">CI: {p.ci} • Tel: {p.telefono||'-'}</p></div>
+                        <div><p className="font-bold text-sm">{p.nombre}{cond[p.id]&&<span className="ml-1 bg-pink-500 text-white text-[8px] px-1.5 py-0.5 rounded-full">⚠️</span>}</p><p className="text-[10px] text-gray-400">CI: {formatCI(p.ci)} • Tel: {p.telefono||'-'}</p></div>
                         <div className="flex gap-1">
-                            <button onClick={()=>{setEditId(p.id);setForm({nombre:p.nombre,ci:p.ci,telefono:p.telefono||'',email:p.email||''})}} className="p-2 text-brand-500"><Edit2 size={14}/></button>
+                            <button onClick={()=>{setEditId(p.id);setForm({nombre:p.nombre,ci:p.ci,telefono:p.telefono||'',email:p.email||''});setCiDisplay(formatCI(p.ci))}} className="p-2 text-brand-500"><Edit2 size={14}/></button>
                             <button onClick={()=>onMed(p.id)} className="p-2 text-pink-500"><FileHeart size={14}/></button>
                             <button onClick={()=>onHist(p.id)} className="p-2 text-brand-500"><FileText size={14}/></button>
                             <button onClick={()=>delPatient(p)} className="p-2 text-red-500 hover:bg-red-50 rounded"><Trash2 size={14}/></button>
