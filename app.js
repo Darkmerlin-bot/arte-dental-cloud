@@ -1918,244 +1918,277 @@ const App = () => {
           </div>
         )}
 
-        {/* CALENDARIO DE LICENCIAS */}
+        {/* ALMANAQUE ANUAL DE LICENCIAS */}
         {currentView === 'calendario' && (
           <div className="space-y-6">
-            <div className="flex justify-between items-center mb-6">
-              <div><h2 className="text-3xl font-black text-slate-800">📅 Calendario de Licencias</h2><p className="text-xs text-slate-600 font-bold uppercase mt-1">Días de ausencia del equipo</p></div>
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
+              <div><h2 className="text-3xl font-black text-slate-800">📅 Almanaque de Licencias</h2><p className="text-xs text-slate-600 font-bold uppercase mt-1">Registro anual de ausencias</p></div>
+              <div className="flex items-center gap-2">
+                <button onClick={() => setCalendarioYear(calendarioYear - 1)} className="p-2 bg-slate-200 rounded-xl hover:bg-slate-300 font-bold">◀</button>
+                <select value={calendarioYear} onChange={(e) => setCalendarioYear(parseInt(e.target.value))} className="px-4 py-2 bg-white border border-slate-200 rounded-xl font-black text-slate-700 text-lg">
+                  {[2023, 2024, 2025, 2026, 2027, 2028, 2029, 2030].map(y => (
+                    <option key={y} value={y}>{y}</option>
+                  ))}
+                </select>
+                <button onClick={() => setCalendarioYear(calendarioYear + 1)} className="p-2 bg-slate-200 rounded-xl hover:bg-slate-300 font-bold">▶</button>
+              </div>
             </div>
             
-            {/* Navegación del calendario */}
+            {/* Leyenda de colores */}
             <div className="bg-white rounded-2xl shadow-md border border-slate-200 p-4">
-              <div className="flex items-center justify-between mb-4">
-                <button onClick={() => {
-                  if (calendarioMonth === 0) {
-                    setCalendarioMonth(11);
-                    setCalendarioYear(calendarioYear - 1);
-                  } else {
-                    setCalendarioMonth(calendarioMonth - 1);
-                  }
-                }} className="p-2 bg-slate-100 rounded-xl hover:bg-slate-200 font-bold">◀</button>
-                
-                <div className="flex items-center gap-4">
-                  <select value={calendarioMonth} onChange={(e) => setCalendarioMonth(parseInt(e.target.value))} className="px-4 py-2 bg-slate-100 rounded-xl font-bold text-slate-700">
-                    {['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'].map((m, i) => (
-                      <option key={i} value={i}>{m}</option>
-                    ))}
-                  </select>
-                  <select value={calendarioYear} onChange={(e) => setCalendarioYear(parseInt(e.target.value))} className="px-4 py-2 bg-slate-100 rounded-xl font-bold text-slate-700">
-                    {[2024, 2025, 2026, 2027, 2028].map(y => (
-                      <option key={y} value={y}>{y}</option>
-                    ))}
-                  </select>
-                </div>
-                
-                <button onClick={() => {
-                  if (calendarioMonth === 11) {
-                    setCalendarioMonth(0);
-                    setCalendarioYear(calendarioYear + 1);
-                  } else {
-                    setCalendarioMonth(calendarioMonth + 1);
-                  }
-                }} className="p-2 bg-slate-100 rounded-xl hover:bg-slate-200 font-bold">▶</button>
-              </div>
-              
-              {/* Leyenda de colores */}
-              <div className="flex flex-wrap gap-3 mb-4 text-xs">
-                <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-blue-500"></span> Licencia</span>
-                <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-red-500"></span> Enfermedad</span>
-                <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-amber-500"></span> Vacaciones</span>
-                <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-slate-500"></span> Otro</span>
-              </div>
-              
-              {/* Cuadrícula del calendario */}
-              <div className="grid grid-cols-7 gap-1">
-                {['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'].map(d => (
-                  <div key={d} className="text-center text-xs font-black text-slate-400 py-2">{d}</div>
-                ))}
-                
-                {(() => {
-                  const firstDay = new Date(calendarioYear, calendarioMonth, 1).getDay();
-                  const daysInMonth = new Date(calendarioYear, calendarioMonth + 1, 0).getDate();
-                  const days = [];
-                  
-                  // Días vacíos al inicio
-                  for (let i = 0; i < firstDay; i++) {
-                    days.push(<div key={`empty-${i}`} className="h-20"></div>);
-                  }
-                  
-                  // Días del mes
-                  for (let day = 1; day <= daysInMonth; day++) {
-                    const dateStr = `${calendarioYear}-${String(calendarioMonth + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-                    const dayLicencias = licencias.filter(l => l.fecha === dateStr);
-                    const isToday = new Date().toISOString().split('T')[0] === dateStr;
-                    const isWeekend = new Date(calendarioYear, calendarioMonth, day).getDay() === 0 || new Date(calendarioYear, calendarioMonth, day).getDay() === 6;
-                    
-                    days.push(
-                      <div 
-                        key={day} 
-                        onClick={() => setSelectedCalendarDate(dateStr)}
-                        className={`min-h-20 p-1 border rounded-lg cursor-pointer transition-all hover:border-emerald-400 ${isToday ? 'border-2 border-emerald-500 bg-emerald-50' : 'border-slate-200'} ${isWeekend ? 'bg-slate-50' : 'bg-white'} ${selectedCalendarDate === dateStr ? 'ring-2 ring-emerald-500' : ''}`}
-                      >
-                        <div className={`text-xs font-bold mb-1 ${isToday ? 'text-emerald-600' : 'text-slate-600'}`}>{day}</div>
-                        <div className="space-y-0.5 overflow-y-auto max-h-14">
-                          {dayLicencias.map(l => {
-                            const colorMap = {
-                              licencia: 'bg-blue-500',
-                              enfermedad: 'bg-red-500',
-                              vacaciones: 'bg-amber-500',
-                              otro: 'bg-slate-500'
-                            };
-                            return (
-                              <div key={l.id} className={`text-[9px] px-1 py-0.5 rounded ${colorMap[l.tipo]} text-white truncate`} title={`${l.user_nombre}: ${l.descripcion || l.tipo}`}>
-                                {l.user_nombre?.split(' ')[0]}
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    );
-                  }
-                  
-                  return days;
-                })()}
+              <div className="flex flex-wrap gap-4 text-sm font-bold">
+                <span className="flex items-center gap-2"><span className="w-4 h-4 rounded bg-blue-500"></span> Licencia</span>
+                <span className="flex items-center gap-2"><span className="w-4 h-4 rounded bg-red-500"></span> Enfermedad</span>
+                <span className="flex items-center gap-2"><span className="w-4 h-4 rounded bg-purple-500"></span> Estudio</span>
+                <span className="flex items-center gap-2"><span className="w-4 h-4 rounded bg-amber-500"></span> Descanso</span>
               </div>
             </div>
             
-            {/* Panel lateral - Detalle del día seleccionado */}
-            {selectedCalendarDate && (
-              <div className="bg-white rounded-2xl shadow-md border border-slate-200 p-6">
-                <div className="flex justify-between items-start mb-4">
-                  <div>
-                    <h3 className="font-black text-slate-800 text-lg">
-                      {new Date(selectedCalendarDate + 'T12:00:00').toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
-                    </h3>
+            {/* Almanaque - 12 meses */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+              {['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'].map((mesNombre, mesIndex) => {
+                const firstDay = new Date(calendarioYear, mesIndex, 1).getDay();
+                const daysInMonth = new Date(calendarioYear, mesIndex + 1, 0).getDate();
+                const monthStr = `${calendarioYear}-${String(mesIndex + 1).padStart(2, '0')}`;
+                const mesLicencias = licencias.filter(l => l.fecha?.startsWith(monthStr));
+                const isCurrentMonth = new Date().getFullYear() === calendarioYear && new Date().getMonth() === mesIndex;
+                
+                return (
+                  <div key={mesIndex} className={`bg-white rounded-2xl shadow-md border-2 p-3 ${isCurrentMonth ? 'border-emerald-400 ring-2 ring-emerald-200' : 'border-slate-200'}`}>
+                    <h4 className={`text-center font-black text-sm mb-2 ${isCurrentMonth ? 'text-emerald-600' : 'text-slate-700'}`}>{mesNombre}</h4>
+                    <div className="grid grid-cols-7 gap-0.5 text-[9px]">
+                      {['D', 'L', 'M', 'M', 'J', 'V', 'S'].map((d, i) => (
+                        <div key={i} className="text-center font-bold text-slate-400 py-0.5">{d}</div>
+                      ))}
+                      {Array(firstDay).fill(null).map((_, i) => <div key={`e-${i}`}></div>)}
+                      {Array.from({ length: daysInMonth }, (_, i) => i + 1).map(day => {
+                        const dateStr = `${calendarioYear}-${String(mesIndex + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                        const dayLicencias = mesLicencias.filter(l => l.fecha === dateStr);
+                        const isToday = new Date().toISOString().split('T')[0] === dateStr;
+                        const isWeekend = new Date(calendarioYear, mesIndex, day).getDay() === 0 || new Date(calendarioYear, mesIndex, day).getDay() === 6;
+                        
+                        let bgColor = isWeekend ? 'bg-slate-100' : 'bg-white';
+                        let textColor = 'text-slate-600';
+                        if (dayLicencias.length > 0) {
+                          const tipo = dayLicencias[0].tipo;
+                          if (tipo === 'licencia') bgColor = 'bg-blue-500 text-white';
+                          else if (tipo === 'enfermedad') bgColor = 'bg-red-500 text-white';
+                          else if (tipo === 'estudio') bgColor = 'bg-purple-500 text-white';
+                          else if (tipo === 'descanso') bgColor = 'bg-amber-500 text-white';
+                          textColor = 'text-white';
+                        }
+                        if (isToday) bgColor = 'bg-emerald-500 text-white ring-2 ring-emerald-300';
+                        
+                        return (
+                          <div 
+                            key={day}
+                            onClick={() => setSelectedCalendarDate(dateStr)}
+                            className={`text-center py-1 rounded cursor-pointer hover:ring-2 hover:ring-slate-400 ${bgColor} ${textColor} ${selectedCalendarDate === dateStr ? 'ring-2 ring-slate-800' : ''} ${dayLicencias.length > 1 ? 'ring-2 ring-offset-1 ring-slate-400' : ''}`}
+                            title={dayLicencias.map(l => `${l.user_nombre}: ${l.tipo}`).join(', ')}
+                          >
+                            {day}
+                            {dayLicencias.length > 1 && <span className="text-[7px]">+{dayLicencias.length - 1}</span>}
+                          </div>
+                        );
+                      })}
+                    </div>
+                    {mesLicencias.length > 0 && (
+                      <div className="mt-2 pt-2 border-t border-slate-100 text-[9px] text-slate-500">
+                        {mesLicencias.length} día{mesLicencias.length > 1 ? 's' : ''} de licencia
+                      </div>
+                    )}
                   </div>
-                  <button onClick={() => setSelectedCalendarDate(null)} className="text-slate-400 hover:text-slate-600">✕</button>
+                );
+              })}
+            </div>
+            
+            {/* Panel de día seleccionado */}
+            {selectedCalendarDate && (
+              <div className="bg-white rounded-2xl shadow-xl border-2 border-slate-200 p-6">
+                <div className="flex justify-between items-start mb-4">
+                  <h3 className="font-black text-slate-800 text-xl">
+                    📅 {new Date(selectedCalendarDate + 'T12:00:00').toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
+                  </h3>
+                  <button onClick={() => setSelectedCalendarDate(null)} className="p-2 bg-slate-100 rounded-xl hover:bg-slate-200">✕</button>
                 </div>
                 
-                {/* Licencias del día */}
                 {(() => {
                   const dayLicencias = licencias.filter(l => l.fecha === selectedCalendarDate);
-                  const myLicencia = dayLicencias.find(l => l.user_id === session.user.id);
+                  const myLicencia = dayLicencias.find(l => l.user_id === session?.user?.id);
                   
                   return (
                     <div className="space-y-4">
+                      {/* Lista de ausencias del día */}
                       {dayLicencias.length > 0 ? (
                         <div className="space-y-2">
-                          <p className="text-sm font-bold text-slate-500">Ausencias este día:</p>
+                          <p className="text-sm font-bold text-slate-500 uppercase">Ausencias registradas:</p>
                           {dayLicencias.map(l => {
                             const colorMap = {
-                              licencia: 'bg-blue-100 border-blue-300 text-blue-800',
-                              enfermedad: 'bg-red-100 border-red-300 text-red-800',
-                              vacaciones: 'bg-amber-100 border-amber-300 text-amber-800',
-                              otro: 'bg-slate-100 border-slate-300 text-slate-800'
+                              licencia: 'bg-blue-100 border-blue-400 text-blue-800',
+                              enfermedad: 'bg-red-100 border-red-400 text-red-800',
+                              estudio: 'bg-purple-100 border-purple-400 text-purple-800',
+                              descanso: 'bg-amber-100 border-amber-400 text-amber-800'
                             };
-                            const tipoLabel = { licencia: 'Licencia', enfermedad: 'Enfermedad', vacaciones: 'Vacaciones', otro: 'Otro' };
+                            const tipoLabel = { licencia: '📋 Licencia', enfermedad: '🏥 Enfermedad', estudio: '📚 Estudio', descanso: '😴 Descanso' };
                             return (
-                              <div key={l.id} className={`p-3 rounded-xl border-2 ${colorMap[l.tipo]} flex justify-between items-center`}>
+                              <div key={l.id} className={`p-4 rounded-xl border-2 ${colorMap[l.tipo] || 'bg-slate-100 border-slate-300'} flex justify-between items-center`}>
                                 <div>
-                                  <p className="font-bold">{l.user_nombre}</p>
-                                  <p className="text-xs">{tipoLabel[l.tipo]}{l.descripcion ? `: ${l.descripcion}` : ''}</p>
+                                  <p className="font-black text-lg">{l.user_nombre}</p>
+                                  <p className="text-sm font-bold">{tipoLabel[l.tipo] || l.tipo}{l.descripcion ? ` - ${l.descripcion}` : ''}</p>
                                 </div>
-                                {(l.user_id === session.user.id || userProfile?.role === 'admin') && (
+                                {(l.user_id === session?.user?.id || userProfile?.role === 'admin') && (
                                   <button onClick={async () => {
-                                    if (!confirm('¿Eliminar esta licencia?')) return;
+                                    if (!confirm(`¿Eliminar licencia de ${l.user_nombre}?`)) return;
                                     const { error } = await sb.from('licencias').delete().eq('id', l.id);
                                     if (error) { showNotify("Error: " + error.message, "error"); return; }
                                     await addLog('ELIMINAR_LICENCIA', `Eliminó licencia de ${l.user_nombre} el ${selectedCalendarDate}`);
                                     showNotify("Licencia eliminada");
                                     loadData();
-                                  }} className="p-2 bg-white/50 rounded-lg hover:bg-white/80 text-red-600">🗑️</button>
+                                  }} className="p-3 bg-white rounded-xl hover:bg-red-50 text-red-500 font-bold">🗑️</button>
                                 )}
                               </div>
                             );
                           })}
                         </div>
                       ) : (
-                        <p className="text-slate-400 text-sm">No hay ausencias registradas</p>
+                        <p className="text-slate-400 py-4 text-center">No hay ausencias registradas este día</p>
                       )}
                       
-                      {/* Formulario para agregar licencia propia */}
-                      {!myLicencia && (
-                        <div className="border-t pt-4 mt-4">
-                          <p className="text-sm font-bold text-slate-600 mb-3">Agregar mi ausencia:</p>
-                          <form onSubmit={async (e) => {
-                            e.preventDefault();
-                            const d = new FormData(e.target);
-                            const tipo = d.get('tipo');
-                            const descripcion = d.get('descripcion');
-                            
-                            const { error } = await sb.from('licencias').insert([{
-                              user_id: session.user.id,
-                              user_nombre: userProfile.nombre,
-                              fecha: selectedCalendarDate,
-                              tipo,
-                              descripcion: descripcion || null
-                            }]);
-                            
-                            if (error) {
-                              showNotify("Error: " + error.message, "error");
-                              return;
-                            }
-                            
-                            await addLog('AGREGAR_LICENCIA', `Agregó ${tipo} el ${selectedCalendarDate}`);
-                            showNotify("Licencia agregada");
-                            loadData();
-                          }} className="space-y-3">
-                            <div className="grid grid-cols-2 gap-3">
-                              <select name="tipo" className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold" required>
-                                <option value="licencia">Licencia</option>
-                                <option value="vacaciones">Vacaciones</option>
-                                <option value="enfermedad">Enfermedad</option>
-                                <option value="otro">Otro</option>
+                      {/* Formulario para agregar licencia */}
+                      <div className="border-t-2 border-slate-100 pt-6 mt-6">
+                        <p className="text-sm font-black text-slate-700 uppercase mb-4">
+                          {userProfile?.role === 'admin' ? '➕ Agregar licencia' : '➕ Agregar mi licencia'}
+                        </p>
+                        <form onSubmit={async (e) => {
+                          e.preventDefault();
+                          const d = new FormData(e.target);
+                          const tipo = d.get('tipo');
+                          const descripcion = d.get('descripcion');
+                          const targetUserId = userProfile?.role === 'admin' ? d.get('usuario') : session.user.id;
+                          const targetUserNombre = userProfile?.role === 'admin' 
+                            ? profiles.find(p => p.id === targetUserId)?.nombre 
+                            : userProfile.nombre;
+                          
+                          // Verificar si ya existe
+                          const existe = licencias.find(l => l.fecha === selectedCalendarDate && l.user_id === targetUserId);
+                          if (existe) {
+                            showNotify("Este usuario ya tiene licencia este día", "error");
+                            return;
+                          }
+                          
+                          const { error } = await sb.from('licencias').insert([{
+                            user_id: targetUserId,
+                            user_nombre: targetUserNombre,
+                            fecha: selectedCalendarDate,
+                            tipo,
+                            descripcion: descripcion || null
+                          }]);
+                          
+                          if (error) {
+                            showNotify("Error: " + error.message, "error");
+                            return;
+                          }
+                          
+                          await addLog('AGREGAR_LICENCIA', `Agregó ${tipo} para ${targetUserNombre} el ${selectedCalendarDate}`);
+                          showNotify("Licencia agregada");
+                          e.target.reset();
+                          loadData();
+                        }} className="space-y-4">
+                          {userProfile?.role === 'admin' && (
+                            <div>
+                              <label className="text-[10px] font-black text-slate-400 uppercase mb-2 block">Usuario</label>
+                              <select name="usuario" className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl font-bold" required>
+                                {profiles.map(p => (
+                                  <option key={p.id} value={p.id}>{p.nombre}</option>
+                                ))}
                               </select>
-                              <input name="descripcion" placeholder="Descripción (opcional)" className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm" />
                             </div>
-                            <button type="submit" className="w-full py-3 bg-emerald-500 text-white rounded-xl font-bold text-sm hover:bg-emerald-600">Agregar</button>
-                          </form>
-                        </div>
-                      )}
+                          )}
+                          <div className="grid grid-cols-2 gap-4">
+                            <div>
+                              <label className="text-[10px] font-black text-slate-400 uppercase mb-2 block">Tipo</label>
+                              <select name="tipo" className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl font-bold" required>
+                                <option value="licencia">📋 Licencia</option>
+                                <option value="enfermedad">🏥 Enfermedad</option>
+                                <option value="estudio">📚 Estudio</option>
+                                <option value="descanso">😴 Descanso</option>
+                              </select>
+                            </div>
+                            <div>
+                              <label className="text-[10px] font-black text-slate-400 uppercase mb-2 block">Descripción (opcional)</label>
+                              <input name="descripcion" placeholder="Ej: Trámite personal" className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl font-bold" />
+                            </div>
+                          </div>
+                          <button type="submit" className="w-full py-4 bg-emerald-500 text-white rounded-xl font-black uppercase hover:bg-emerald-600 shadow-lg">Agregar Licencia</button>
+                        </form>
+                      </div>
                     </div>
                   );
                 })()}
               </div>
             )}
             
-            {/* Resumen de licencias del mes */}
+            {/* Resumen anual por usuario */}
             <div className="bg-white rounded-2xl shadow-md border border-slate-200 p-6">
-              <h3 className="font-black text-slate-800 mb-4">📊 Resumen del mes</h3>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                {(() => {
-                  const monthStr = `${calendarioYear}-${String(calendarioMonth + 1).padStart(2, '0')}`;
-                  const monthLicencias = licencias.filter(l => l.fecha.startsWith(monthStr));
-                  
-                  const porUsuario = {};
-                  monthLicencias.forEach(l => {
-                    if (!porUsuario[l.user_nombre]) porUsuario[l.user_nombre] = { total: 0, tipos: {} };
-                    porUsuario[l.user_nombre].total++;
-                    porUsuario[l.user_nombre].tipos[l.tipo] = (porUsuario[l.user_nombre].tipos[l.tipo] || 0) + 1;
-                  });
-                  
-                  return Object.entries(porUsuario).map(([nombre, data]) => (
-                    <div key={nombre} className="bg-slate-50 rounded-xl p-4">
-                      <p className="font-bold text-slate-800 text-sm truncate">{nombre}</p>
-                      <p className="text-2xl font-black text-slate-600">{data.total} <span className="text-xs font-bold">días</span></p>
-                      <div className="flex gap-1 mt-2">
-                        {data.tipos.licencia && <span className="text-[9px] bg-blue-500 text-white px-1 rounded">{data.tipos.licencia}L</span>}
-                        {data.tipos.vacaciones && <span className="text-[9px] bg-amber-500 text-white px-1 rounded">{data.tipos.vacaciones}V</span>}
-                        {data.tipos.enfermedad && <span className="text-[9px] bg-red-500 text-white px-1 rounded">{data.tipos.enfermedad}E</span>}
-                        {data.tipos.otro && <span className="text-[9px] bg-slate-500 text-white px-1 rounded">{data.tipos.otro}O</span>}
-                      </div>
-                    </div>
-                  ));
-                })()}
-                {(() => {
-                  const monthStr = `${calendarioYear}-${String(calendarioMonth + 1).padStart(2, '0')}`;
-                  const monthLicencias = licencias.filter(l => l.fecha.startsWith(monthStr));
-                  if (monthLicencias.length === 0) return <p className="col-span-full text-slate-400 text-sm">No hay licencias este mes</p>;
-                  return null;
-                })()}
+              <h3 className="font-black text-slate-800 text-xl mb-4">📊 Resumen Anual {calendarioYear}</h3>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b-2 border-slate-200">
+                      <th className="text-left py-3 px-2 font-black text-slate-600">Usuario</th>
+                      <th className="text-center py-3 px-2 font-bold text-blue-600">Licencia</th>
+                      <th className="text-center py-3 px-2 font-bold text-red-600">Enfermedad</th>
+                      <th className="text-center py-3 px-2 font-bold text-purple-600">Estudio</th>
+                      <th className="text-center py-3 px-2 font-bold text-amber-600">Descanso</th>
+                      <th className="text-center py-3 px-2 font-black text-slate-800">Total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(() => {
+                      const yearLicencias = licencias.filter(l => l.fecha?.startsWith(String(calendarioYear)));
+                      const porUsuario = {};
+                      
+                      yearLicencias.forEach(l => {
+                        if (!porUsuario[l.user_nombre]) {
+                          porUsuario[l.user_nombre] = { licencia: 0, enfermedad: 0, estudio: 0, descanso: 0, total: 0 };
+                        }
+                        porUsuario[l.user_nombre][l.tipo] = (porUsuario[l.user_nombre][l.tipo] || 0) + 1;
+                        porUsuario[l.user_nombre].total++;
+                      });
+                      
+                      const sorted = Object.entries(porUsuario).sort((a, b) => b[1].total - a[1].total);
+                      
+                      if (sorted.length === 0) {
+                        return (
+                          <tr>
+                            <td colSpan="6" className="text-center py-8 text-slate-400">No hay licencias registradas en {calendarioYear}</td>
+                          </tr>
+                        );
+                      }
+                      
+                      return sorted.map(([nombre, data]) => (
+                        <tr key={nombre} className="border-b border-slate-100 hover:bg-slate-50">
+                          <td className="py-3 px-2 font-bold text-slate-800">{nombre}</td>
+                          <td className="text-center py-3 px-2">
+                            {data.licencia > 0 && <span className="bg-blue-100 text-blue-700 px-2 py-1 rounded-lg font-bold">{data.licencia}</span>}
+                          </td>
+                          <td className="text-center py-3 px-2">
+                            {data.enfermedad > 0 && <span className="bg-red-100 text-red-700 px-2 py-1 rounded-lg font-bold">{data.enfermedad}</span>}
+                          </td>
+                          <td className="text-center py-3 px-2">
+                            {data.estudio > 0 && <span className="bg-purple-100 text-purple-700 px-2 py-1 rounded-lg font-bold">{data.estudio}</span>}
+                          </td>
+                          <td className="text-center py-3 px-2">
+                            {data.descanso > 0 && <span className="bg-amber-100 text-amber-700 px-2 py-1 rounded-lg font-bold">{data.descanso}</span>}
+                          </td>
+                          <td className="text-center py-3 px-2">
+                            <span className="bg-slate-800 text-white px-3 py-1 rounded-lg font-black">{data.total}</span>
+                          </td>
+                        </tr>
+                      ));
+                    })()}
+                  </tbody>
+                </table>
               </div>
             </div>
           </div>
