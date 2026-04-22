@@ -2,7 +2,7 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8"/>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
     <meta name="apple-mobile-web-app-capable" content="yes"/>
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
     <meta name="apple-mobile-web-app-title" content="Arte Dental"/>
@@ -32,6 +32,8 @@
         .safe-bottom{padding-bottom:env(safe-area-inset-bottom)}
         .safe-top{padding-top:env(safe-area-inset-top)}
         @supports(padding:max(0px)){.safe-bottom{padding-bottom:max(1rem,env(safe-area-inset-bottom))}}
+        .tooth{cursor:pointer;transition:transform .1s}
+        .tooth:hover{transform:scale(1.1)}
     </style>
     <script src="https://unpkg.com/@babel/standalone@7.23.5/babel.min.js"></script>
     <script type="importmap">{"imports":{"react":"https://esm.sh/react@18.2.0","react-dom/client":"https://esm.sh/react-dom@18.2.0/client","lucide-react":"https://esm.sh/lucide-react@0.263.1"}}</script>
@@ -39,16 +41,17 @@
 <body class="bg-slate-50 text-gray-800">
 <div id="root"></div>
 <script type="text/babel" data-type="module">
-import React,{useState,useEffect,useRef} from 'react';
+import React,{useState,useEffect,useRef,useMemo} from 'react';
 import {createRoot} from 'react-dom/client';
-import {Trash2,Calendar,Users,Search,FileText,Printer,Save,PlusCircle,Edit2,Shield,RotateCcw,Image as ImageIcon,UserPlus,LogOut,LayoutDashboard,Download,Upload,RefreshCw,Key,X,Phone,UserCheck,UserX,CreditCard,Trash,Pill,AlertTriangle,FileHeart,HeartPulse,Syringe,Building2,Cloud,CloudOff,Wifi,WifiOff,ClipboardList,Menu,CheckCircle2,XCircle} from 'lucide-react';
+import {Trash2,Calendar,Users,Search,FileText,Printer,Save,PlusCircle,Edit2,Shield,RotateCcw,Image as ImageIcon,UserPlus,LogOut,LayoutDashboard,Download,Upload,RefreshCw,Key,X,Phone,UserCheck,UserX,CreditCard,Trash,Pill,AlertTriangle,FileHeart,HeartPulse,Syringe,Building2,Cloud,CloudOff,Wifi,WifiOff,ClipboardList,Menu,CheckCircle2,XCircle,BarChart3,TrendingUp,Clock,DollarSign,Activity} from 'lucide-react';
 
 const SUPABASE_URL='https://gffhlahrjwiojdewvxws.supabase.co';
 const SUPABASE_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdmZmhsYWhyandpb2pkZXd2eHdzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjY5NDA2ODYsImV4cCI6MjA4MjUxNjY4Nn0.yUdUDPYU63-70l-a2b3fqxDfb_GkX6hUveHRwaYcadc';
 const supabase=window.supabase.createClient(SUPABASE_URL,SUPABASE_KEY);
 const Role={ADMIN:'admin',ODONTOLOGO:'odontologo',USUARIO:'usuario'};
+const INACTIVITY_MS=30*60*1000; // 30 min auto-logout
 
-// ===== SISTEMA DE TOAST =====
+// ===== TOASTS =====
 const tLabels={users:'usuarios',patients:'pacientes',appointments:'citas',history:'historial',images:'imágenes',medical_records:'ficha médica'};
 const toastListeners=new Set();let toastId=0;
 const toast={
@@ -59,36 +62,91 @@ const toast={
 };
 const dbErr=(op,t,e)=>{console.error(op,t,e);const detail=e?.message||e?.hint||'sin conexión';toast.err(`Error al ${op} ${tLabels[t]||t}: ${detail}`)};
 
+// ===== DB layer =====
 const DB={
     online:false,
     check:async()=>{try{const{error}=await supabase.from('users').select('id').limit(1);DB.online=!error;return DB.online}catch{DB.online=false;return false}},
-    getAll:async(t)=>{try{const{data,error}=await supabase.from(t).select('*').order('id');if(error)throw error;return data||[]}catch(e){dbErr('cargar',t,e);return[]}},
+    // getAll: si notDeleted=true, filtra server-side (deleted IS NULL OR deleted = false)
+    getAll:async(t,opts={})=>{try{let q=supabase.from(t).select('*');if(opts.notDeleted)q=q.or('deleted.is.null,deleted.eq.false');if(opts.eq)for(const[k,v]of Object.entries(opts.eq))q=q.eq(k,v);q=opts.orderBy?q.order(opts.orderBy,{ascending:opts.asc!==false}):q.order('id');const{data,error}=await q;if(error)throw error;return data||[]}catch(e){dbErr('cargar',t,e);return[]}},
     insert:async(t,r)=>{try{const{data,error}=await supabase.from(t).insert(r).select().single();if(error)throw error;return data}catch(e){dbErr('guardar',t,e);return null}},
     update:async(t,id,r)=>{try{const{data,error}=await supabase.from(t).update(r).eq('id',id).select().single();if(error)throw error;return data}catch(e){dbErr('actualizar',t,e);return null}},
     delete:async(t,id)=>{try{const{error}=await supabase.from(t).delete().eq('id',id);if(error)throw error;return true}catch(e){dbErr('eliminar',t,e);return false}}
 };
 
+// ===== Service layer =====
 const S={
-    init:async()=>{const ok=await DB.check();if(ok){const u=await DB.getAll('users');if(!u.length)await DB.insert('users',{username:'Admin',password:'10680',name:'Administrador',role:Role.ADMIN})}return ok},
-    getUsers:()=>DB.getAll('users'),
-    saveUser:async u=>u.id?DB.update('users',u.id,u):DB.insert('users',u),
+    init:async()=>{return await DB.check()},
+    // Obtiene el usuario actual desde la sesión de Auth
+    getCurrentUser:async()=>{
+        const{data:{session}}=await supabase.auth.getSession();
+        if(!session)return null;
+        const{data,error}=await supabase.from('users').select('*').eq('email',session.user.email).maybeSingle();
+        if(error||!data)return null;
+        return data;
+    },
+    getUsers:()=>DB.getAll('users',{orderBy:'id'}),
+    // Actualiza metadatos del usuario (nombre, role, username). NO maneja password.
+    updateUserMeta:async u=>DB.update('users',u.id,{name:u.name,username:(u.username||'').toLowerCase(),role:u.role}),
+    // Crea usuario nuevo: signUp en Auth + fila en tabla users
+    // Preserva sesión del admin
+    createUser:async({email,password,name,username,role})=>{
+        email=(email||'').trim().toLowerCase();
+        username=(username||'').trim().toLowerCase();
+        if(!email||!password||!name||!username)return{ok:false,err:'Faltan campos'};
+        if(password.length<6)return{ok:false,err:'Contraseña mínima 6 caracteres'};
+        try{
+            const{data:sess}=await supabase.auth.getSession();
+            const adminSession=sess?.session;
+            const{data,error}=await supabase.auth.signUp({email,password});
+            if(error)throw error;
+            // Restaurar sesión del admin (si existía)
+            if(adminSession){
+                await supabase.auth.setSession({access_token:adminSession.access_token,refresh_token:adminSession.refresh_token});
+            }
+            const row=await DB.insert('users',{email,username,name,role,auth_id:data.user?.id});
+            if(!row)return{ok:false,err:'Usuario creado en Auth pero falló el guardado de metadatos'};
+            return{ok:true,user:row};
+        }catch(e){
+            return{ok:false,err:e.message||'Error al crear usuario'};
+        }
+    },
     delUser:id=>DB.delete('users',id),
-    getPatients:async()=>(await DB.getAll('patients')).filter(p=>!p.deleted),
+    // Cambio de contraseña propia
+    changeOwnPassword:async np=>{
+        if(np.length<6)return{ok:false,err:'Mínimo 6 caracteres'};
+        const{error}=await supabase.auth.updateUser({password:np});
+        if(error)return{ok:false,err:error.message};
+        return{ok:true};
+    },
+    getPatients:()=>DB.getAll('patients',{notDeleted:true}),
     savePatient:async p=>p.id?DB.update('patients',p.id,p):DB.insert('patients',p),
     delPatient:id=>DB.update('patients',id,{deleted:true}),
-    getApps:async()=>(await DB.getAll('appointments')).filter(a=>!a.deleted),
+    getApps:()=>DB.getAll('appointments',{notDeleted:true}),
     saveApp:async a=>a.id?DB.update('appointments',a.id,a):DB.insert('appointments',a),
     delApp:id=>DB.update('appointments',id,{deleted:true}),
-    getHist:async pid=>(await DB.getAll('history')).filter(h=>String(h.paciente_id)===String(pid)&&!h.deleted).sort((a,b)=>b.id-a.id),
+    getHist:async pid=>DB.getAll('history',{notDeleted:true,eq:{paciente_id:pid},orderBy:'id',asc:false}),
     saveHist:h=>DB.insert('history',h),
-    getImgs:async pid=>(await DB.getAll('images')).filter(i=>String(i.paciente_id)===String(pid)&&!i.deleted),
+    getImgs:async pid=>DB.getAll('images',{notDeleted:true,eq:{paciente_id:pid}}),
     saveImg:i=>DB.insert('images',i),
     delImg:id=>DB.update('images',id,{deleted:true}),
-    getMed:async pid=>{const all=await DB.getAll('medical_records');return all.find(r=>String(r.paciente_id)===String(pid))||null},
+    getMed:async pid=>{const{data}=await supabase.from('medical_records').select('*').eq('paciente_id',pid).maybeSingle();return data},
     saveMed:async r=>{const ex=await S.getMed(r.paciente_id);return ex?DB.update('medical_records',ex.id,r):DB.insert('medical_records',r)},
     hasCond:async pid=>{const r=await S.getMed(pid);if(!r)return false;return(r.alergias?.length>0)||(r.alergias_medicamentos?.length>0)||(r.medicacion_actual?.length>0)||Object.entries(r.antecedentes_personales||{}).some(([k,v])=>k!=='otros'&&v===true)},
-    export:async()=>JSON.stringify({users:await DB.getAll('users'),patients:await DB.getAll('patients'),appointments:await DB.getAll('appointments'),history:await DB.getAll('history'),images:await DB.getAll('images'),medical_records:await DB.getAll('medical_records')},null,2),
-    import:async json=>{try{const d=JSON.parse(json);for(const[t,rows]of Object.entries(d))for(const r of rows)await supabase.from(t).upsert(r);return true}catch{return false}}
+    export:async()=>JSON.stringify({patients:await DB.getAll('patients'),appointments:await DB.getAll('appointments'),history:await DB.getAll('history'),images:await DB.getAll('images'),medical_records:await DB.getAll('medical_records')},null,2),
+    // Import seguro: NO permite tabla users
+    import:async json=>{
+        try{
+            const d=JSON.parse(json);
+            const allowed=['patients','appointments','history','images','medical_records'];
+            const keys=Object.keys(d);
+            if(keys.some(k=>!allowed.includes(k))){
+                toast.err('Backup inválido: contiene tablas no permitidas (p.ej. usuarios)');
+                return false;
+            }
+            for(const t of keys)for(const r of d[t])await supabase.from(t).upsert(r);
+            return true;
+        }catch{return false}
+    }
 };
 
 const isPast=(d,t)=>d&&t?new Date(d+'T'+t)<new Date():false;
@@ -107,12 +165,73 @@ const Toasts=()=>{
     </div>
 };
 
+// ===== LOGIN (case-insensitive) =====
 const Login=({onLogin,online})=>{
     const[u,setU]=useState('');const[p,setP]=useState('');const[err,setErr]=useState('');const[loading,setLoading]=useState(false);
-    const submit=async e=>{e.preventDefault();if(!u||!p)return setErr('Complete todos los campos');setLoading(true);setErr('');const email=u.includes('@')?u:`${u}@local.com`;try{const{data,error}=await supabase.auth.signInWithPassword({email,password:p});if(error)throw error;const users=await S.getUsers();const user=users.find(x=>x.email===email);if(user){onLogin(user)}else{await supabase.auth.signOut();setErr('Usuario no encontrado en el sistema')}}catch(e){setErr('Credenciales incorrectas')}finally{setLoading(false)}};
-    return<div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-brand-600 to-indigo-900 p-4 safe-top safe-bottom"><div className="w-full max-w-sm bg-white rounded-2xl shadow-2xl p-6 text-center"><Cloud size={40} className="mx-auto text-brand-600 mb-2"/><h1 className="text-2xl font-bold text-brand-600 mb-1">🦷 Arte Dental</h1><p className="text-[10px] text-gray-400 mb-2">Sistema en la Nube</p><div className="mb-4 flex justify-center"><Status on={online}/></div><form onSubmit={submit} className="space-y-3"><input type="text" value={u} onChange={e=>setU(e.target.value)} className="w-full p-3 border rounded-xl font-medium" placeholder="Usuario" autoComplete="username"/><input type="password" value={p} onChange={e=>setP(e.target.value)} className="w-full p-3 border rounded-xl font-medium" placeholder="Contraseña" autoComplete="current-password"/>{err&&<p className="text-red-500 text-xs font-medium">{err}</p>}<button type="submit" disabled={loading||!online} className="w-full bg-brand-600 text-white font-bold py-3 rounded-xl disabled:opacity-50">{loading?'Conectando...':online?'Ingresar':'Sin conexión'}</button></form></div></div>
+    const submit=async e=>{
+        e.preventDefault();
+        if(!u||!p)return setErr('Complete todos los campos');
+        setLoading(true);setErr('');
+        const username=u.trim().toLowerCase();
+        const email=username.includes('@')?username:`${username}@local.com`;
+        try{
+            const{error}=await supabase.auth.signInWithPassword({email,password:p});
+            if(error)throw error;
+            const user=await S.getCurrentUser();
+            if(!user){
+                await supabase.auth.signOut();
+                setErr('Usuario autenticado pero sin perfil en el sistema');
+                return;
+            }
+            onLogin(user);
+        }catch(e){setErr('Credenciales incorrectas')}
+        finally{setLoading(false)}
+    };
+    return<div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-brand-600 to-indigo-900 p-4 safe-top safe-bottom"><div className="w-full max-w-sm bg-white rounded-2xl shadow-2xl p-6 text-center"><Cloud size={40} className="mx-auto text-brand-600 mb-2"/><h1 className="text-2xl font-bold text-brand-600 mb-1">🦷 Arte Dental</h1><p className="text-[10px] text-gray-400 mb-2">Sistema en la Nube</p><div className="mb-4 flex justify-center"><Status on={online}/></div><form onSubmit={submit} className="space-y-3"><input type="text" value={u} onChange={e=>setU(e.target.value)} className="w-full p-3 border rounded-xl font-medium" placeholder="Usuario" autoComplete="username" autoCapitalize="none" spellCheck="false"/><input type="password" value={p} onChange={e=>setP(e.target.value)} className="w-full p-3 border rounded-xl font-medium" placeholder="Contraseña" autoComplete="current-password"/>{err&&<p className="text-red-500 text-xs font-medium">{err}</p>}<button type="submit" disabled={loading||!online} className="w-full bg-brand-600 text-white font-bold py-3 rounded-xl disabled:opacity-50">{loading?'Conectando...':online?'Ingresar':'Sin conexión'}</button></form></div></div>
 };
 
+// ===== DASHBOARD (nuevo) =====
+const Dashboard=({user})=>{
+    const[stats,setStats]=useState(null);const[upcoming,setUpcoming]=useState([]);
+    useEffect(()=>{(async()=>{
+        const[pts,apps]=await Promise.all([S.getPatients(),S.getApps()]);
+        const today=new Date().toISOString().split('T')[0];
+        const monthStart=today.substring(0,7);
+        const past=apps.filter(a=>isPast(a.fecha,a.hora));
+        const pastDecidido=past.filter(a=>a.asistio===true||a.asistio===false);
+        const asistidas=past.filter(a=>a.asistio===true).length;
+        const abonadoMes=pts.reduce((s,p)=>s+(p.abonado||0),0);
+        setStats({
+            totalPacientes:pts.length,
+            citasHoy:apps.filter(a=>a.fecha===today&&!isPast(a.fecha,a.hora)).length,
+            citasProximas:apps.filter(a=>!isPast(a.fecha,a.hora)).length,
+            asistenciaPct:pastDecidido.length?Math.round((asistidas/pastDecidido.length)*100):null,
+            saldoPendiente:pts.reduce((s,p)=>s+Math.max(0,(p.presupuesto||0)-(p.abonado||0)),0)
+        });
+        setUpcoming(apps.filter(a=>!isPast(a.fecha,a.hora)).sort((a,b)=>new Date(a.fecha+'T'+a.hora)-new Date(b.fecha+'T'+b.hora)).slice(0,5));
+    })()},[]);
+
+    if(!stats)return<div className="p-8 text-center text-gray-400"><RefreshCw className="animate-spin mx-auto mb-2" size={24}/>Cargando...</div>;
+    const Card=({label,value,icon:Icon,color,sub})=><div className="bg-white p-4 rounded-xl border"><div className="flex justify-between items-start"><div><p className="text-[10px] font-bold text-gray-400 uppercase">{label}</p><p className={`text-2xl font-bold ${color}`}>{value}</p>{sub&&<p className="text-[10px] text-gray-400">{sub}</p>}</div><Icon size={20} className={color}/></div></div>;
+
+    return<div className="space-y-4 animate-fade-in">
+        <div className="bg-gradient-to-br from-brand-600 to-indigo-900 p-4 rounded-xl text-white"><h2 className="text-lg font-bold">Hola, {user.name} 👋</h2><p className="text-[11px] text-white/70">{new Date().toLocaleDateString('es-UY',{weekday:'long',day:'numeric',month:'long'})}</p></div>
+        <div className="grid grid-cols-2 gap-3">
+            <Card label="Pacientes" value={stats.totalPacientes} icon={Users} color="text-brand-600"/>
+            <Card label="Citas hoy" value={stats.citasHoy} icon={Calendar} color="text-emerald-600"/>
+            <Card label="Próximas" value={stats.citasProximas} icon={Clock} color="text-amber-600"/>
+            <Card label="Asistencia" value={stats.asistenciaPct===null?'—':stats.asistenciaPct+'%'} icon={TrendingUp} color="text-indigo-600" sub="sobre pasadas"/>
+            <Card label="Saldo pendiente" value={'$'+stats.saldoPendiente.toLocaleString('es-UY')} icon={DollarSign} color="text-red-600"/>
+            <Card label="Total cobrado" value={'$'+(stats.totalPacientes?upcoming.length:0).toLocaleString('es-UY')} icon={Activity} color="text-slate-600" sub="histórico"/>
+        </div>
+        {upcoming.length>0&&<div className="bg-white rounded-xl border overflow-hidden">
+            <div className="p-3 border-b bg-gray-50"><h3 className="text-xs font-bold text-gray-500 uppercase">Próximas citas</h3></div>
+            <div className="divide-y">{upcoming.map(a=><div key={a.id} className="p-3 flex justify-between items-center"><div><p className="font-bold text-sm">{a.paciente_nombre}</p><p className="text-[10px] text-gray-400">Dr. {a.odontologo}</p></div><div className="text-right"><p className="text-xs font-bold text-brand-600">{a.fecha}</p><p className="text-[10px] text-gray-400">{a.hora}</p></div></div>)}</div>
+        </div>}
+    </div>
+};
+
+// ===== AGENDA =====
 const Agenda=({user})=>{
     const[apps,setApps]=useState([]);const[pts,setPts]=useState([]);const[users,setUsers]=useState([]);
     const[search,setSearch]=useState('');const[showList,setShowList]=useState(false);const[tab,setTab]=useState('prox');
@@ -173,6 +292,7 @@ const Agenda=({user})=>{
     </div>
 };
 
+// ===== PACIENTES =====
 const Patients=({user,onHist,onMed})=>{
     const[pts,setPts]=useState([]);const[search,setSearch]=useState('');
     const[form,setForm]=useState({nombre:'',ci:'',telefono:'',email:''});const[editId,setEditId]=useState(null);
@@ -196,7 +316,7 @@ const Patients=({user,onHist,onMed})=>{
             <div className="flex gap-2 mt-3"><button onClick={submit} disabled={saving} className="flex-1 bg-brand-600 text-white py-2.5 rounded-xl font-bold text-sm disabled:opacity-50">{saving?'Guardando...':'Guardar'}</button>{editId&&<button onClick={()=>{setEditId(null);setForm({nombre:'',ci:'',telefono:'',email:''});setCiDisplay('')}} disabled={saving} className="px-4 bg-gray-200 text-gray-600 py-2.5 rounded-xl font-bold text-sm disabled:opacity-50">✕</button>}</div>
         </div>
         <div className="bg-white rounded-xl border overflow-hidden">
-            <div className="p-3 border-b bg-gray-50"><div className="relative"><Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" size={14}/><input placeholder="Buscar..." value={search} onChange={e=>setSearch(e.target.value)} className="w-full pl-8 pr-3 py-2 border rounded-lg text-sm"/></div></div>
+            <div className="p-3 border-b bg-gray-50"><div className="relative"><Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" size={14}/><input placeholder="Buscar nombre o CI..." value={search} onChange={e=>setSearch(e.target.value)} className="w-full pl-8 pr-3 py-2 border rounded-lg text-sm"/></div></div>
             <div className="divide-y max-h-[60vh] overflow-auto">
                 {pts.filter(p=>(p.nombre||'').toLowerCase().includes(search.toLowerCase())||(p.ci||'').includes(search)).map(p=><div key={p.id} className={`p-3 ${cond[p.id]?'medical-alert':''}`}>
                     <div className="flex justify-between items-center">
@@ -209,73 +329,119 @@ const Patients=({user,onHist,onMed})=>{
                         </div>
                     </div>
                 </div>)}
+                {pts.length===0&&<div className="p-8 text-center text-gray-300 text-xs">Sin pacientes</div>}
             </div>
         </div>
     </div>
 };
 
+// ===== ODONTOGRAMA =====
+const TOOTH_STATES={
+    sano:{color:'#ffffff',border:'#94a3b8',label:'Sano'},
+    caries:{color:'#ef4444',border:'#b91c1c',label:'Caries'},
+    restaurado:{color:'#3b82f6',border:'#1e40af',label:'Restaurado'},
+    endodoncia:{color:'#f59e0b',border:'#b45309',label:'Endodoncia'},
+    corona:{color:'#fbbf24',border:'#a16207',label:'Corona'},
+    implante:{color:'#10b981',border:'#047857',label:'Implante'},
+    extraccion:{color:'#6b7280',border:'#374151',label:'A extraer'},
+    ausente:{color:'#1f2937',border:'#000',label:'Ausente'}
+};
+const UPPER=[18,17,16,15,14,13,12,11,21,22,23,24,25,26,27,28];
+const LOWER=[48,47,46,45,44,43,42,41,31,32,33,34,35,36,37,38];
+
+const Odontogram=({value,onChange,onSave})=>{
+    const[sel,setSel]=useState(null);
+    const getState=n=>value?.[n]||'sano';
+    const setState=(n,s)=>{onChange({...(value||{}),[n]:s});setSel(null)};
+    const Tooth=({n})=>{const st=TOOTH_STATES[getState(n)];return<div className="flex flex-col items-center gap-0.5"><span className="text-[8px] text-gray-400 font-bold">{n}</span><div className="tooth w-7 h-9 rounded-md flex items-center justify-center text-[9px] font-bold" style={{background:st.color,border:`2px solid ${st.border}`,color:st.color==='#ffffff'?'#64748b':'#fff'}} onClick={()=>setSel(n)}>🦷</div></div>};
+
+    return<div className="bg-white p-4 rounded-xl border">
+        <div className="flex justify-between items-center mb-3"><h3 className="text-xs font-bold text-brand-600 uppercase">Odontograma (FDI)</h3><button onClick={onSave} className="text-xs bg-brand-600 text-white px-3 py-1 rounded-lg font-bold">Guardar</button></div>
+        <div className="overflow-x-auto">
+            <div className="min-w-[520px] space-y-2">
+                <div className="flex justify-center gap-1">{UPPER.map(n=><Tooth key={n} n={n}/>)}</div>
+                <div className="border-t border-dashed border-gray-300 my-1"/>
+                <div className="flex justify-center gap-1">{LOWER.map(n=><Tooth key={n} n={n}/>)}</div>
+            </div>
+        </div>
+        <div className="mt-3 grid grid-cols-4 gap-1 text-[9px]">{Object.entries(TOOTH_STATES).map(([k,v])=><div key={k} className="flex items-center gap-1"><div className="w-3 h-3 rounded" style={{background:v.color,border:`1px solid ${v.border}`}}/><span>{v.label}</span></div>)}</div>
+        {sel&&<div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={()=>setSel(null)}><div className="bg-white rounded-xl p-4 max-w-xs w-full" onClick={e=>e.stopPropagation()}><h4 className="font-bold text-sm mb-2">Pieza {sel}</h4><div className="grid grid-cols-2 gap-2">{Object.entries(TOOTH_STATES).map(([k,v])=><button key={k} onClick={()=>setState(sel,k)} className="p-2 rounded-lg border-2 text-xs font-bold" style={{background:v.color,borderColor:v.border,color:v.color==='#ffffff'?'#1f2937':'#fff'}}>{v.label}</button>)}</div></div></div>}
+    </div>
+};
+
+// ===== FICHA MÉDICA + ODONTOGRAMA =====
 const Medical=({user,initId})=>{
     const[pts,setPts]=useState([]);const[selId,setSelId]=useState(initId||'');const[rec,setRec]=useState(null);
     const[newA,setNewA]=useState('');const[newMA,setNewMA]=useState('');const[newMed,setNewMed]=useState({nombre:'',dosis:''});
+    const[view,setView]=useState('ficha');
 
     useEffect(()=>{S.getPatients().then(setPts)},[]);
     useEffect(()=>{if(selId)loadRec()},[selId]);
 
-    const loadRec=async()=>{const r=await S.getMed(selId);setRec(r||{paciente_id:parseInt(selId),antecedentes_familiares:{},antecedentes_personales:{},alergias:[],alergias_medicamentos:[],medicacion_actual:[],derivado_de:{es_derivado:false},observaciones:'',fecha_actualizacion:new Date().toLocaleDateString()})};
-    const save=async()=>{const r=await S.saveMed({...rec,fecha_actualizacion:new Date().toLocaleDateString()});if(r){await S.saveHist({paciente_id:parseInt(selId),fecha:new Date().toLocaleDateString(),odontologo:'Sistema',motivo:'FICHA MÉDICA ACTUALIZADA',tipo:'SISTEMA',deleted:false});toast.ok('Ficha médica guardada');loadRec()}};
+    const loadRec=async()=>{const r=await S.getMed(selId);setRec(r||{paciente_id:parseInt(selId),antecedentes_familiares:{},antecedentes_personales:{},alergias:[],alergias_medicamentos:[],medicacion_actual:[],derivado_de:{es_derivado:false},observaciones:'',odontograma:{},fecha_actualizacion:new Date().toLocaleDateString()})};
+    const save=async()=>{const r=await S.saveMed({...rec,fecha_actualizacion:new Date().toLocaleDateString()});if(r){await S.saveHist({paciente_id:parseInt(selId),fecha:new Date().toLocaleDateString(),odontologo:user.name,motivo:'FICHA MÉDICA ACTUALIZADA',tipo:'SISTEMA',deleted:false});toast.ok('Ficha guardada');loadRec()}};
     const patient=pts.find(p=>String(p.id)===String(selId));
 
     return<div className="space-y-4 animate-fade-in">
         <div className="bg-gradient-to-r from-pink-500 to-purple-600 p-4 rounded-xl text-white">
-            <div className="flex items-center gap-2 mb-3"><FileHeart size={24}/><h2 className="text-lg font-bold">Ficha Médica</h2></div>
+            <div className="flex items-center gap-2 mb-3"><FileHeart size={24}/><h2 className="text-lg font-bold">Ficha Clínica</h2></div>
             <select value={selId} onChange={e=>setSelId(e.target.value)} className="w-full p-2.5 rounded-lg text-gray-800 font-medium text-sm"><option value="">Seleccionar paciente...</option>{pts.map(p=><option key={p.id} value={p.id}>{p.nombre}</option>)}</select>
         </div>
-        {patient&&rec&&<div className="space-y-4">
-            <div className="bg-purple-50 p-4 rounded-xl border border-purple-100">
-                <h3 className="text-xs font-bold text-purple-700 mb-2 uppercase">Antecedentes Familiares</h3>
-                <div className="grid grid-cols-2 gap-2">{['diabetes','hipertension','cardiopatias','cancer'].map(k=><label key={k} className="flex items-center gap-2 p-2 bg-white rounded-lg text-xs"><input type="checkbox" checked={rec.antecedentes_familiares?.[k]||false} onChange={e=>setRec({...rec,antecedentes_familiares:{...rec.antecedentes_familiares,[k]:e.target.checked}})} className="accent-purple-600"/>{k.charAt(0).toUpperCase()+k.slice(1)}</label>)}</div>
-            </div>
-            <div className="bg-blue-50 p-4 rounded-xl border border-blue-100">
-                <h3 className="text-xs font-bold text-blue-700 mb-2 uppercase">Antecedentes Personales</h3>
-                <div className="grid grid-cols-3 gap-2">{['diabetes','hipertension','cardiopatia','hepatitis','asma','epilepsia','embarazo','fumador'].map(k=><label key={k} className="flex items-center gap-1 p-1.5 bg-white rounded-lg text-[10px]"><input type="checkbox" checked={rec.antecedentes_personales?.[k]||false} onChange={e=>setRec({...rec,antecedentes_personales:{...rec.antecedentes_personales,[k]:e.target.checked}})} className="accent-blue-600"/>{k.charAt(0).toUpperCase()+k.slice(1)}</label>)}</div>
-            </div>
-            <div className="bg-red-50 p-4 rounded-xl border border-red-100">
-                <h3 className="text-xs font-bold text-red-700 mb-2 uppercase">Alergias</h3>
-                <div className="flex gap-2 mb-2"><input placeholder="Nueva alergia..." value={newA} onChange={e=>setNewA(e.target.value)} className="flex-1 p-2 border rounded-lg text-sm"/><button onClick={()=>newA.trim()&&(setRec({...rec,alergias:[...(rec.alergias||[]),newA.trim()]}),setNewA(''))} className="px-3 bg-red-600 text-white rounded-lg text-xs font-bold">+</button></div>
-                <div className="flex flex-wrap gap-1">{(rec.alergias||[]).map((a,i)=><span key={i} className="bg-red-200 text-red-800 px-2 py-1 rounded-full text-xs flex items-center gap-1">{a}<button onClick={()=>setRec({...rec,alergias:rec.alergias.filter((_,x)=>x!==i)})}>×</button></span>)}</div>
-            </div>
-            <div className="bg-orange-50 p-4 rounded-xl border border-orange-100">
-                <h3 className="text-xs font-bold text-orange-700 mb-2 uppercase">Alergias Medicamentos</h3>
-                <div className="flex gap-2 mb-2"><input placeholder="Medicamento..." value={newMA} onChange={e=>setNewMA(e.target.value)} className="flex-1 p-2 border rounded-lg text-sm"/><button onClick={()=>newMA.trim()&&(setRec({...rec,alergias_medicamentos:[...(rec.alergias_medicamentos||[]),newMA.trim()]}),setNewMA(''))} className="px-3 bg-orange-600 text-white rounded-lg text-xs font-bold">+</button></div>
-                <div className="flex flex-wrap gap-1">{(rec.alergias_medicamentos||[]).map((a,i)=><span key={i} className="bg-orange-200 text-orange-800 px-2 py-1 rounded-full text-xs flex items-center gap-1">💊{a}<button onClick={()=>setRec({...rec,alergias_medicamentos:rec.alergias_medicamentos.filter((_,x)=>x!==i)})}>×</button></span>)}</div>
-            </div>
-            <div className="bg-emerald-50 p-4 rounded-xl border border-emerald-100">
-                <h3 className="text-xs font-bold text-emerald-700 mb-2 uppercase">Medicación Actual</h3>
-                <div className="flex gap-2 mb-2"><input placeholder="Medicamento" value={newMed.nombre} onChange={e=>setNewMed({...newMed,nombre:e.target.value})} className="flex-1 p-2 border rounded-lg text-xs"/><input placeholder="Dosis" value={newMed.dosis} onChange={e=>setNewMed({...newMed,dosis:e.target.value})} className="w-16 p-2 border rounded-lg text-xs"/><button onClick={()=>newMed.nombre.trim()&&(setRec({...rec,medicacion_actual:[...(rec.medicacion_actual||[]),{...newMed}]}),setNewMed({nombre:'',dosis:''}))} className="px-3 bg-emerald-600 text-white rounded-lg text-xs font-bold">+</button></div>
-                <div className="space-y-1">{(rec.medicacion_actual||[]).map((m,i)=><div key={i} className="bg-white p-2 rounded-lg border flex justify-between text-xs"><span>{m.nombre} {m.dosis&&<span className="text-gray-400">({m.dosis})</span>}</span><button onClick={()=>setRec({...rec,medicacion_actual:rec.medicacion_actual.filter((_,x)=>x!==i)})} className="text-red-400">×</button></div>)}</div>
-            </div>
-            <div className="bg-slate-100 p-4 rounded-xl border">
-                <h3 className="text-xs font-bold text-slate-700 mb-2 uppercase">Observaciones</h3>
-                <textarea placeholder="Notas..." value={rec.observaciones||''} onChange={e=>setRec({...rec,observaciones:e.target.value})} className="w-full p-2 border rounded-lg text-sm h-20 resize-none"/>
-            </div>
-            <button onClick={save} className="w-full bg-gradient-to-r from-pink-500 to-purple-600 text-white py-4 rounded-xl font-bold"><Save size={18} className="inline mr-2"/>Guardar</button>
-        </div>}
+        {patient&&rec&&<>
+            <div className="flex gap-2"><button onClick={()=>setView('ficha')} className={`flex-1 py-2 rounded-lg text-xs font-bold ${view==='ficha'?'bg-brand-600 text-white':'bg-white border'}`}>Médica</button><button onClick={()=>setView('odo')} className={`flex-1 py-2 rounded-lg text-xs font-bold ${view==='odo'?'bg-brand-600 text-white':'bg-white border'}`}>Odontograma</button></div>
+
+            {view==='ficha'&&<div className="space-y-4">
+                <div className="bg-purple-50 p-4 rounded-xl border border-purple-100">
+                    <h3 className="text-xs font-bold text-purple-700 mb-2 uppercase">Antecedentes Familiares</h3>
+                    <div className="grid grid-cols-2 gap-2">{['diabetes','hipertension','cardiopatias','cancer'].map(k=><label key={k} className="flex items-center gap-2 p-2 bg-white rounded-lg text-xs"><input type="checkbox" checked={rec.antecedentes_familiares?.[k]||false} onChange={e=>setRec({...rec,antecedentes_familiares:{...rec.antecedentes_familiares,[k]:e.target.checked}})} className="accent-purple-600"/>{k.charAt(0).toUpperCase()+k.slice(1)}</label>)}</div>
+                </div>
+                <div className="bg-blue-50 p-4 rounded-xl border border-blue-100">
+                    <h3 className="text-xs font-bold text-blue-700 mb-2 uppercase">Antecedentes Personales</h3>
+                    <div className="grid grid-cols-3 gap-2">{['diabetes','hipertension','cardiopatia','hepatitis','asma','epilepsia','embarazo','fumador'].map(k=><label key={k} className="flex items-center gap-1 p-1.5 bg-white rounded-lg text-[10px]"><input type="checkbox" checked={rec.antecedentes_personales?.[k]||false} onChange={e=>setRec({...rec,antecedentes_personales:{...rec.antecedentes_personales,[k]:e.target.checked}})} className="accent-blue-600"/>{k.charAt(0).toUpperCase()+k.slice(1)}</label>)}</div>
+                </div>
+                <div className="bg-red-50 p-4 rounded-xl border border-red-100">
+                    <h3 className="text-xs font-bold text-red-700 mb-2 uppercase">Alergias</h3>
+                    <div className="flex gap-2 mb-2"><input placeholder="Nueva alergia..." value={newA} onChange={e=>setNewA(e.target.value)} className="flex-1 p-2 border rounded-lg text-sm"/><button onClick={()=>newA.trim()&&(setRec({...rec,alergias:[...(rec.alergias||[]),newA.trim()]}),setNewA(''))} className="px-3 bg-red-600 text-white rounded-lg text-xs font-bold">+</button></div>
+                    <div className="flex flex-wrap gap-1">{(rec.alergias||[]).map((a,i)=><span key={i} className="bg-red-200 text-red-800 px-2 py-1 rounded-full text-xs flex items-center gap-1">{a}<button onClick={()=>setRec({...rec,alergias:rec.alergias.filter((_,x)=>x!==i)})}>×</button></span>)}</div>
+                </div>
+                <div className="bg-orange-50 p-4 rounded-xl border border-orange-100">
+                    <h3 className="text-xs font-bold text-orange-700 mb-2 uppercase">Alergias Medicamentos</h3>
+                    <div className="flex gap-2 mb-2"><input placeholder="Medicamento..." value={newMA} onChange={e=>setNewMA(e.target.value)} className="flex-1 p-2 border rounded-lg text-sm"/><button onClick={()=>newMA.trim()&&(setRec({...rec,alergias_medicamentos:[...(rec.alergias_medicamentos||[]),newMA.trim()]}),setNewMA(''))} className="px-3 bg-orange-600 text-white rounded-lg text-xs font-bold">+</button></div>
+                    <div className="flex flex-wrap gap-1">{(rec.alergias_medicamentos||[]).map((a,i)=><span key={i} className="bg-orange-200 text-orange-800 px-2 py-1 rounded-full text-xs flex items-center gap-1">💊{a}<button onClick={()=>setRec({...rec,alergias_medicamentos:rec.alergias_medicamentos.filter((_,x)=>x!==i)})}>×</button></span>)}</div>
+                </div>
+                <div className="bg-emerald-50 p-4 rounded-xl border border-emerald-100">
+                    <h3 className="text-xs font-bold text-emerald-700 mb-2 uppercase">Medicación Actual</h3>
+                    <div className="flex gap-2 mb-2"><input placeholder="Medicamento" value={newMed.nombre} onChange={e=>setNewMed({...newMed,nombre:e.target.value})} className="flex-1 p-2 border rounded-lg text-xs"/><input placeholder="Dosis" value={newMed.dosis} onChange={e=>setNewMed({...newMed,dosis:e.target.value})} className="w-16 p-2 border rounded-lg text-xs"/><button onClick={()=>newMed.nombre.trim()&&(setRec({...rec,medicacion_actual:[...(rec.medicacion_actual||[]),{...newMed}]}),setNewMed({nombre:'',dosis:''}))} className="px-3 bg-emerald-600 text-white rounded-lg text-xs font-bold">+</button></div>
+                    <div className="space-y-1">{(rec.medicacion_actual||[]).map((m,i)=><div key={i} className="bg-white p-2 rounded-lg border flex justify-between text-xs"><span>{m.nombre} {m.dosis&&<span className="text-gray-400">({m.dosis})</span>}</span><button onClick={()=>setRec({...rec,medicacion_actual:rec.medicacion_actual.filter((_,x)=>x!==i)})} className="text-red-400">×</button></div>)}</div>
+                </div>
+                <div className="bg-slate-100 p-4 rounded-xl border">
+                    <h3 className="text-xs font-bold text-slate-700 mb-2 uppercase">Observaciones</h3>
+                    <textarea placeholder="Notas..." value={rec.observaciones||''} onChange={e=>setRec({...rec,observaciones:e.target.value})} className="w-full p-2 border rounded-lg text-sm h-20 resize-none"/>
+                </div>
+                <button onClick={save} className="w-full bg-gradient-to-r from-pink-500 to-purple-600 text-white py-4 rounded-xl font-bold"><Save size={18} className="inline mr-2"/>Guardar Ficha</button>
+            </div>}
+
+            {view==='odo'&&<Odontogram value={rec.odontograma} onChange={o=>setRec({...rec,odontograma:o})} onSave={save}/>}
+        </>}
         {!selId&&<div className="bg-white rounded-xl p-12 text-center border"><FileHeart size={40} className="mx-auto text-gray-200 mb-2"/><p className="text-gray-400 text-sm">Seleccione paciente</p></div>}
     </div>
 };
 
+// ===== HISTORIA (con filtro por tipo) =====
 const History=({user,initId})=>{
     const[pts,setPts]=useState([]);const[selId,setSelId]=useState(initId||'');
     const[hist,setHist]=useState([]);const[imgs,setImgs]=useState([]);const[users,setUsers]=useState([]);const[medRec,setMedRec]=useState(null);
     const[view,setView]=useState('evo');const[form,setForm]=useState({tto:'',dr:user.role===Role.ODONTOLOGO?user.name:''});
     const[presForm,setPresForm]=useState({monto:'',motivo:''});const[pago,setPago]=useState('');
     const[fullImg,setFullImg]=useState(null);const[uploading,setUploading]=useState(false);
+    const[filter,setFilter]=useState('TODO');
 
     useEffect(()=>{Promise.all([S.getPatients(),S.getUsers()]).then(([p,u])=>{setPts(p);setUsers(u.filter(x=>x.role===Role.ODONTOLOGO))})},[]);
     useEffect(()=>{if(selId)load()},[selId]);
 
     const load=async()=>{setHist(await S.getHist(selId));setImgs(await S.getImgs(selId));setMedRec(await S.getMed(selId))};
     const patient=pts.find(p=>String(p.id)===String(selId));
+    const filtered=useMemo(()=>filter==='TODO'?hist:hist.filter(h=>h.tipo===filter),[hist,filter]);
 
     const saveEvo=async()=>{if(!form.tto||!form.dr)return toast.warn('Complete campos');const r=await S.saveHist({paciente_id:parseInt(selId),fecha:new Date().toLocaleDateString(),odontologo:form.dr,motivo:form.tto,tipo:'EVOLUCION',deleted:false});if(r){setForm({tto:'',dr:user.role===Role.ODONTOLOGO?user.name:form.dr});toast.ok('Evolución guardada');load()}};
 
@@ -291,6 +457,8 @@ const History=({user,initId})=>{
     };
 
     const addPhoto=async e=>{const files=Array.from(e.target.files);if(!files.length)return;setUploading(true);for(const f of files){const d=await compress(f);await S.saveImg({paciente_id:parseInt(selId),data:d,date:new Date().toLocaleDateString(),deleted:false})}setUploading(false);load()};
+
+    const FILTERS=[['TODO','Todo'],['EVOLUCION','Evoluciones'],['PAGO','Pagos'],['PRESUPUESTO','Presup.'],['CITA','Citas'],['SISTEMA','Sistema']];
 
     return<div className="space-y-4 animate-fade-in">
         <div className="bg-white p-3 rounded-xl border"><select value={selId} onChange={e=>setSelId(e.target.value)} className="w-full p-2 border rounded-lg font-medium text-sm"><option value="">Seleccionar paciente...</option>{pts.map(p=><option key={p.id} value={p.id}>{p.nombre}</option>)}</select></div>
@@ -317,8 +485,9 @@ const History=({user,initId})=>{
             </div>
             <div className="bg-white rounded-xl border overflow-hidden">
                 <div className="flex border-b"><button onClick={()=>setView('evo')} className={`flex-1 py-2 text-xs font-bold ${view==='evo'?'bg-brand-50 text-brand-600':'text-gray-400'}`}><ClipboardList size={14} className="inline mr-1"/>Historial</button><button onClick={()=>setView('img')} className={`flex-1 py-2 text-xs font-bold ${view==='img'?'bg-brand-50 text-brand-600':'text-gray-400'}`}><ImageIcon size={14} className="inline mr-1"/>Fotos</button></div>
+                {view==='evo'&&<div className="p-2 border-b flex gap-1 overflow-x-auto scrollbar-hide">{FILTERS.map(([k,l])=><button key={k} onClick={()=>setFilter(k)} className={`px-2.5 py-1 rounded-full text-[10px] font-bold whitespace-nowrap ${filter===k?'bg-brand-600 text-white':'bg-gray-100 text-gray-500'}`}>{l}</button>)}</div>}
                 <div className="max-h-[40vh] overflow-auto">
-                    {view==='evo'?<div className="divide-y">{hist.map(h=><div key={h.id} className={`p-3 border-l-4 ${h.tipo==='PAGO'?'border-emerald-500 bg-emerald-50':h.tipo==='PRESUPUESTO'?'border-indigo-500 bg-indigo-50':h.tipo==='CITA'?'border-amber-500 bg-amber-50':h.tipo==='SISTEMA'?'border-slate-800 bg-slate-100':'border-brand-500'}`}><div className="flex justify-between text-[10px] font-bold text-gray-500 mb-1"><span>{h.fecha}</span><span>{h.tipo==='EVOLUCION'?'Dr. '+h.odontologo:h.tipo}</span></div><p className="text-sm">{h.motivo}</p></div>)}{hist.length===0&&<div className="p-8 text-center text-gray-300 text-xs">Sin registros</div>}</div>
+                    {view==='evo'?<div className="divide-y">{filtered.map(h=><div key={h.id} className={`p-3 border-l-4 ${h.tipo==='PAGO'?'border-emerald-500 bg-emerald-50':h.tipo==='PRESUPUESTO'?'border-indigo-500 bg-indigo-50':h.tipo==='CITA'?'border-amber-500 bg-amber-50':h.tipo==='SISTEMA'?'border-slate-800 bg-slate-100':'border-brand-500'}`}><div className="flex justify-between text-[10px] font-bold text-gray-500 mb-1"><span>{h.fecha}</span><span>{h.tipo==='EVOLUCION'?'Dr. '+h.odontologo:h.tipo}</span></div><p className="text-sm">{h.motivo}</p></div>)}{filtered.length===0&&<div className="p-8 text-center text-gray-300 text-xs">Sin registros</div>}</div>
                     :<div className="p-3 grid grid-cols-3 gap-2"><label className="aspect-square border-2 border-dashed rounded-lg flex flex-col items-center justify-center cursor-pointer">{uploading?<RefreshCw className="animate-spin" size={20}/>:<><Upload size={20} className="text-gray-400"/><span className="text-[10px] text-gray-400">Subir</span></>}<input type="file" multiple accept="image/*" onChange={addPhoto} className="hidden" disabled={uploading}/></label>{imgs.map(i=><div key={i.id} className="relative aspect-square rounded-lg overflow-hidden border"><img src={i.data} className="w-full h-full object-cover" onClick={()=>setFullImg(i.data)}/><button onClick={async()=>{if(confirm('¿Borrar?')){await S.delImg(i.id);load()}}} className="absolute top-1 right-1 bg-red-500 text-white p-0.5 rounded text-[10px]">×</button></div>)}</div>}
                 </div>
             </div>
@@ -327,65 +496,110 @@ const History=({user,initId})=>{
     </div>
 };
 
+// ===== ADMIN (sin passwords en tabla) =====
 const Admin=({user,online})=>{
     const isAdmin=user.role===Role.ADMIN;
     const[tab,setTab]=useState(isAdmin?'users':'backup');
-    const[users,setUsers]=useState([]);const[uForm,setUForm]=useState({name:'',username:'',password:'',role:Role.USUARIO});const[editId,setEditId]=useState(null);
+    const[users,setUsers]=useState([]);
+    const[uForm,setUForm]=useState({name:'',username:'',email:'',password:'',role:Role.USUARIO});
+    const[editId,setEditId]=useState(null);const[saving,setSaving]=useState(false);
     const fileRef=useRef();
 
     useEffect(()=>{if(tab==='users')S.getUsers().then(setUsers)},[tab]);
-    const saveUser=async()=>{if(!uForm.name||!uForm.username||!uForm.password)return toast.warn('Complete todos los campos');const r=editId?await S.saveUser({id:editId,...uForm}):await S.saveUser(uForm);if(r){setUForm({name:'',username:'',password:'',role:Role.USUARIO});setEditId(null);setUsers(await S.getUsers());toast.ok(editId?'Usuario actualizado':'Usuario creado')}};
+
+    const saveUser=async()=>{
+        setSaving(true);
+        try{
+            if(editId){
+                if(!uForm.name||!uForm.username)return toast.warn('Nombre y usuario obligatorios');
+                const r=await S.updateUserMeta({id:editId,name:uForm.name,username:uForm.username,role:uForm.role});
+                if(r){setUForm({name:'',username:'',email:'',password:'',role:Role.USUARIO});setEditId(null);setUsers(await S.getUsers());toast.ok('Usuario actualizado')}
+            }else{
+                if(!uForm.name||!uForm.username||!uForm.email||!uForm.password)return toast.warn('Complete todos los campos');
+                const r=await S.createUser(uForm);
+                if(r.ok){setUForm({name:'',username:'',email:'',password:'',role:Role.USUARIO});setUsers(await S.getUsers());toast.ok('Usuario creado')}
+                else toast.err(r.err);
+            }
+        }finally{setSaving(false)}
+    };
 
     return<div className="space-y-4 animate-fade-in">
         <div className="flex gap-2 overflow-x-auto pb-2">{isAdmin&&<button onClick={()=>setTab('users')} className={`px-4 py-2 rounded-lg text-xs font-bold whitespace-nowrap ${tab==='users'?'bg-brand-600 text-white':'bg-white border text-gray-500'}`}>Usuarios</button>}<button onClick={()=>setTab('backup')} className={`px-4 py-2 rounded-lg text-xs font-bold whitespace-nowrap ${tab==='backup'?'bg-emerald-600 text-white':'bg-white border text-gray-500'}`}>Backup</button><button onClick={()=>setTab('info')} className={`px-4 py-2 rounded-lg text-xs font-bold whitespace-nowrap ${tab==='info'?'bg-indigo-600 text-white':'bg-white border text-gray-500'}`}>Sistema</button></div>
-        
+
         {tab==='users'&&isAdmin&&<div className="space-y-4">
             <div className="bg-white p-4 rounded-xl border">
                 <h3 className="font-bold text-xs uppercase text-brand-600 mb-3">{editId?'Editar':'Nuevo'} Usuario</h3>
                 <div className="space-y-2">
                     <input placeholder="Nombre" value={uForm.name} onChange={e=>setUForm({...uForm,name:e.target.value})} className="w-full p-2.5 border rounded-lg text-sm"/>
-                    <input placeholder="Usuario" value={uForm.username} onChange={e=>setUForm({...uForm,username:e.target.value})} className="w-full p-2.5 border rounded-lg text-sm"/>
-                    <input placeholder="Contraseña" value={uForm.password} onChange={e=>setUForm({...uForm,password:e.target.value})} className="w-full p-2.5 border rounded-lg text-sm"/>
+                    <input placeholder="Usuario (solo minúsculas)" value={uForm.username} onChange={e=>setUForm({...uForm,username:e.target.value.toLowerCase()})} className="w-full p-2.5 border rounded-lg text-sm" autoCapitalize="none"/>
+                    {!editId&&<input type="email" placeholder="Email" value={uForm.email} onChange={e=>setUForm({...uForm,email:e.target.value.toLowerCase()})} className="w-full p-2.5 border rounded-lg text-sm" autoCapitalize="none"/>}
+                    {!editId&&<input type="password" placeholder="Contraseña (mín. 6)" value={uForm.password} onChange={e=>setUForm({...uForm,password:e.target.value})} className="w-full p-2.5 border rounded-lg text-sm"/>}
                     <select value={uForm.role} onChange={e=>setUForm({...uForm,role:e.target.value})} className="w-full p-2.5 border rounded-lg text-sm font-medium"><option value={Role.USUARIO}>Usuario</option><option value={Role.ODONTOLOGO}>Odontólogo</option><option value={Role.ADMIN}>Administrador</option></select>
-                    <button onClick={saveUser} className="w-full bg-brand-600 text-white py-2.5 rounded-xl font-bold text-sm">Guardar</button>
-                    {editId&&<button onClick={()=>{setEditId(null);setUForm({name:'',username:'',password:'',role:Role.USUARIO})}} className="w-full bg-gray-200 text-gray-600 py-2 rounded-xl font-bold text-sm">Cancelar</button>}
+                    <button onClick={saveUser} disabled={saving} className="w-full bg-brand-600 text-white py-2.5 rounded-xl font-bold text-sm disabled:opacity-50">{saving?'Guardando...':'Guardar'}</button>
+                    {editId&&<button onClick={()=>{setEditId(null);setUForm({name:'',username:'',email:'',password:'',role:Role.USUARIO})}} className="w-full bg-gray-200 text-gray-600 py-2 rounded-xl font-bold text-sm">Cancelar</button>}
+                    {!editId&&<p className="text-[10px] text-amber-600">⚠️ Desactivá "Confirm email" en Supabase para que funcione</p>}
                 </div>
             </div>
-            <div className="bg-white rounded-xl border overflow-hidden divide-y">{users.map(u=><div key={u.id} className="p-3 flex justify-between items-center"><div><p className="font-bold text-sm">{u.name}</p><p className="text-[10px] text-gray-400">@{u.username} • {u.role}</p></div><div className="flex gap-1"><button onClick={()=>{setEditId(u.id);setUForm({name:u.name,username:u.username,password:u.password,role:u.role})}} className="p-2 text-brand-500"><Edit2 size={14}/></button><button onClick={async()=>{if(u.id===1)return toast.warn('No se puede eliminar Admin');if(confirm('¿Eliminar?')){const ok=await S.delUser(u.id);if(ok){setUsers(await S.getUsers());toast.ok('Usuario eliminado')}}}} className="p-2 text-red-400"><Trash2 size={14}/></button></div></div>)}</div>
+            <div className="bg-white rounded-xl border overflow-hidden divide-y">{users.map(u=><div key={u.id} className="p-3 flex justify-between items-center"><div><p className="font-bold text-sm">{u.name}</p><p className="text-[10px] text-gray-400">@{u.username} • {u.email} • {u.role}</p></div><div className="flex gap-1"><button onClick={()=>{setEditId(u.id);setUForm({name:u.name,username:u.username,email:u.email||'',password:'',role:u.role})}} className="p-2 text-brand-500"><Edit2 size={14}/></button><button onClick={async()=>{if(u.email===user.email)return toast.warn('No podés eliminarte a vos mismo');if(confirm('¿Eliminar fila de la tabla users? (La cuenta en Auth queda; borrala manualmente desde Supabase)')){const ok=await S.delUser(u.id);if(ok){setUsers(await S.getUsers());toast.ok('Usuario eliminado')}}}} className="p-2 text-red-400"><Trash2 size={14}/></button></div></div>)}</div>
         </div>}
 
         {tab==='backup'&&<div className="space-y-4">
-            <div className="bg-white p-6 rounded-xl border text-center"><Download size={32} className="mx-auto text-brand-600 mb-2"/><h4 className="font-bold mb-2">Exportar</h4><button onClick={async()=>{const d=await S.export();const b=new Blob([d],{type:'application/json'});const u=URL.createObjectURL(b);const a=document.createElement('a');a.href=u;a.download='ArteDental_'+new Date().toISOString().split('T')[0]+'.json';a.click()}} className="w-full bg-brand-600 text-white py-3 rounded-xl font-bold text-sm">Descargar</button></div>
-            <div className="bg-white p-6 rounded-xl border text-center"><Upload size={32} className="mx-auto text-emerald-600 mb-2"/><h4 className="font-bold mb-2">Importar</h4><input type="file" ref={fileRef} accept=".json" className="hidden" onChange={async e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=async ev=>{if(await S.import(ev.target.result)){toast.ok('Backup importado - recargando...');setTimeout(()=>window.location.reload(),1500)}else toast.err('Error al importar backup')};r.readAsText(f)}}/><button onClick={()=>fileRef.current.click()} className="w-full bg-emerald-600 text-white py-3 rounded-xl font-bold text-sm">Cargar</button></div>
+            <div className="bg-white p-6 rounded-xl border text-center"><Download size={32} className="mx-auto text-brand-600 mb-2"/><h4 className="font-bold mb-2">Exportar</h4><p className="text-[10px] text-gray-400 mb-3">Pacientes, citas, historial, imágenes, fichas (sin usuarios)</p><button onClick={async()=>{const d=await S.export();const b=new Blob([d],{type:'application/json'});const u=URL.createObjectURL(b);const a=document.createElement('a');a.href=u;a.download='ArteDental_'+new Date().toISOString().split('T')[0]+'.json';a.click()}} className="w-full bg-brand-600 text-white py-3 rounded-xl font-bold text-sm">Descargar</button></div>
+            <div className="bg-white p-6 rounded-xl border text-center"><Upload size={32} className="mx-auto text-emerald-600 mb-2"/><h4 className="font-bold mb-2">Importar</h4><input type="file" ref={fileRef} accept=".json" className="hidden" onChange={async e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=async ev=>{if(await S.import(ev.target.result)){toast.ok('Backup importado - recargando...');setTimeout(()=>window.location.reload(),1500)}};r.readAsText(f)}}/><button onClick={()=>fileRef.current.click()} className="w-full bg-emerald-600 text-white py-3 rounded-xl font-bold text-sm">Cargar</button></div>
         </div>}
 
-        {tab==='info'&&<div className="bg-gradient-to-br from-indigo-500 to-purple-600 p-6 rounded-xl text-white text-center"><Cloud size={40} className="mx-auto mb-2"/><h4 className="text-lg font-bold mb-2">Sistema en la Nube</h4><p className="text-white/80 text-sm mb-3">Supabase Database</p><div className={`inline-flex items-center gap-2 px-4 py-2 rounded-full ${online?'bg-emerald-500':'bg-red-500'}`}>{online?<><Wifi size={16}/>Conectado</>:<><WifiOff size={16}/>Offline</>}</div></div>}
+        {tab==='info'&&<div className="bg-gradient-to-br from-indigo-500 to-purple-600 p-6 rounded-xl text-white text-center"><Cloud size={40} className="mx-auto mb-2"/><h4 className="text-lg font-bold mb-2">Sistema en la Nube</h4><p className="text-white/80 text-sm mb-3">Supabase Auth + Database</p><div className={`inline-flex items-center gap-2 px-4 py-2 rounded-full ${online?'bg-emerald-500':'bg-red-500'}`}>{online?<><Wifi size={16}/>Conectado</>:<><WifiOff size={16}/>Offline</>}</div><p className="text-white/60 text-[10px] mt-3">v2.0 • Auth JWT • RLS activa</p></div>}
     </div>
 };
 
+// ===== APP PRINCIPAL =====
 const App=()=>{
-    const[user,setUser]=useState(null);const[tab,setTab]=useState('agenda');const[pid,setPid]=useState(null);
-    const[loading,setLoading]=useState(true);const[online,setOnline]=useState(false);const[showPass,setShowPass]=useState(false);const[menuOpen,setMenuOpen]=useState(false);
+    const[user,setUser]=useState(null);const[tab,setTab]=useState('dashboard');const[pid,setPid]=useState(null);
+    const[loading,setLoading]=useState(true);const[online,setOnline]=useState(false);const[showPass,setShowPass]=useState(false);
 
-    useEffect(()=>{S.init().then(ok=>{setOnline(ok);setLoading(false)});const i=setInterval(async()=>setOnline(await DB.check()),30000);return()=>clearInterval(i)},[]);
-    const logout=async()=>{await DB.check();setUser(null)};
+    // Init + recuperar sesión
+    useEffect(()=>{(async()=>{
+        const ok=await S.init();
+        setOnline(ok);
+        if(ok){
+            const u=await S.getCurrentUser();
+            if(u)setUser(u);
+        }
+        setLoading(false);
+    })()},[]);
+
+    // Check online al volver al foco (en vez de polling)
+    useEffect(()=>{const onFocus=async()=>setOnline(await DB.check());window.addEventListener('focus',onFocus);return()=>window.removeEventListener('focus',onFocus)},[]);
+
+    // Auto-logout por inactividad
+    useEffect(()=>{
+        if(!user)return;
+        let timer;
+        const reset=()=>{clearTimeout(timer);timer=setTimeout(async()=>{toast.warn('Sesión cerrada por inactividad');await supabase.auth.signOut();setUser(null)},INACTIVITY_MS)};
+        const events=['mousedown','keydown','touchstart','scroll'];
+        events.forEach(e=>window.addEventListener(e,reset));
+        reset();
+        return()=>{clearTimeout(timer);events.forEach(e=>window.removeEventListener(e,reset))};
+    },[user]);
+
+    const logout=async()=>{await supabase.auth.signOut();setUser(null);toast.ok('Sesión cerrada')};
 
     if(loading)return<><Toasts/><div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-br from-brand-600 to-indigo-900 text-white safe-top safe-bottom"><RefreshCw className="animate-spin mb-3" size={40}/><p className="font-bold">Conectando...</p></div></>;
     if(!user)return<><Toasts/><Login onLogin={setUser} online={online}/></>;
 
-    const tabs=[{id:'agenda',label:'Agenda',icon:Calendar},{id:'pacientes',label:'Pacientes',icon:Users},{id:'ficha',label:'Ficha',icon:FileHeart},{id:'historia',label:'Historia',icon:FileText},{id:'admin',label:'Sistema',icon:Shield}];
+    const tabs=[{id:'dashboard',label:'Inicio',icon:LayoutDashboard},{id:'agenda',label:'Agenda',icon:Calendar},{id:'pacientes',label:'Pacientes',icon:Users},{id:'ficha',label:'Ficha',icon:FileHeart},{id:'historia',label:'Historia',icon:FileText},{id:'admin',label:'Sistema',icon:Shield}];
 
     return<div className="min-h-screen flex flex-col bg-slate-50">
         <Toasts/>
-        {showPass&&<div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4"><div className="bg-white w-full max-w-xs rounded-xl p-5"><h3 className="font-bold text-brand-600 mb-3">Cambiar Contraseña</h3><input id="np" type="password" placeholder="Nueva contraseña" className="w-full p-2.5 border rounded-lg mb-3"/><div className="flex gap-2"><button onClick={async()=>{const np=document.getElementById('np').value;if(np.length<3)return toast.warn('Contraseña muy corta (mín. 3 caracteres)');const r=await S.saveUser({...user,password:np});if(r){setUser({...user,password:np});setShowPass(false);toast.ok('Contraseña cambiada')}}} className="flex-1 bg-brand-600 text-white py-2 rounded-lg font-bold text-sm">Guardar</button><button onClick={()=>setShowPass(false)} className="flex-1 bg-gray-200 text-gray-600 py-2 rounded-lg font-bold text-sm">Cancelar</button></div></div></div>}
-        
+        {showPass&&<div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4"><div className="bg-white w-full max-w-xs rounded-xl p-5"><h3 className="font-bold text-brand-600 mb-3">Cambiar mi Contraseña</h3><input id="np" type="password" placeholder="Nueva contraseña (mín. 6)" className="w-full p-2.5 border rounded-lg mb-3"/><div className="flex gap-2"><button onClick={async()=>{const np=document.getElementById('np').value;const r=await S.changeOwnPassword(np);if(r.ok){setShowPass(false);toast.ok('Contraseña cambiada')}else toast.warn(r.err)}} className="flex-1 bg-brand-600 text-white py-2 rounded-lg font-bold text-sm">Guardar</button><button onClick={()=>setShowPass(false)} className="flex-1 bg-gray-200 text-gray-600 py-2 rounded-lg font-bold text-sm">Cancelar</button></div></div></div>}
+
         <header className="bg-brand-600 text-white p-3 safe-top no-print">
             <div className="flex justify-between items-center">
                 <div className="flex items-center gap-2"><span className="text-xl">🦷</span><span className="font-bold">Arte Dental</span></div>
                 <div className="flex items-center gap-2">
                     <Status on={online}/>
-                    <button onClick={()=>setShowPass(true)} className="p-2 bg-brand-700 rounded-lg"><Key size={16}/></button>
-                    <button onClick={logout} className="p-2 bg-brand-700 rounded-lg"><LogOut size={16}/></button>
+                    <button onClick={()=>setShowPass(true)} className="p-2 bg-brand-700 rounded-lg" title="Cambiar contraseña"><Key size={16}/></button>
+                    <button onClick={logout} className="p-2 bg-brand-700 rounded-lg" title="Cerrar sesión"><LogOut size={16}/></button>
                 </div>
             </div>
         </header>
@@ -395,6 +609,7 @@ const App=()=>{
         </nav>
 
         <main className="flex-1 p-3 overflow-auto safe-bottom">
+            {tab==='dashboard'&&<Dashboard user={user}/>}
             {tab==='agenda'&&<Agenda user={user}/>}
             {tab==='pacientes'&&<Patients user={user} onHist={id=>{setPid(id);setTab('historia')}} onMed={id=>{setPid(id);setTab('ficha')}}/>}
             {tab==='ficha'&&<Medical user={user} initId={pid}/>}
@@ -402,7 +617,7 @@ const App=()=>{
             {tab==='admin'&&<Admin user={user} online={online}/>}
         </main>
 
-        <footer className="p-2 text-center text-[10px] text-gray-400 no-print safe-bottom">Arte Dental © 2025 • {online?'🟢':'🔴'}</footer>
+        <footer className="p-2 text-center text-[10px] text-gray-400 no-print safe-bottom">Arte Dental © 2025 • v2.0 • {online?'🟢':'🔴'}</footer>
     </div>
 };
 
