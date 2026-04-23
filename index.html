@@ -58,7 +58,7 @@
 <script type="text/babel" data-type="module">
 import React,{useState,useEffect,useRef,useMemo} from 'react';
 import {createRoot} from 'react-dom/client';
-import {Trash2,Calendar,Users,Search,FileText,Printer,Save,PlusCircle,Edit2,Shield,RotateCcw,Image as ImageIcon,UserPlus,LogOut,LayoutDashboard,Download,Upload,RefreshCw,Key,X,Phone,UserCheck,UserX,CreditCard,Trash,Pill,AlertTriangle,FileHeart,HeartPulse,Syringe,Building2,Cloud,CloudOff,Wifi,WifiOff,ClipboardList,Menu,CheckCircle2,XCircle,BarChart3,TrendingUp,Clock,DollarSign,Activity,Sun,Moon,ChevronLeft,User as UserIcon} from 'lucide-react';
+import {Trash2,Calendar,Users,Search,FileText,Printer,Save,PlusCircle,Edit2,Shield,RotateCcw,Image as ImageIcon,UserPlus,LogOut,LayoutDashboard,Download,Upload,RefreshCw,Key,X,Phone,UserCheck,UserX,CreditCard,Trash,Pill,AlertTriangle,FileHeart,HeartPulse,Syringe,Building2,Cloud,CloudOff,Wifi,WifiOff,ClipboardList,Menu,CheckCircle2,XCircle,BarChart3,TrendingUp,Clock,DollarSign,Activity,Sun,Moon,ChevronLeft,ChevronRight,User as UserIcon} from 'lucide-react';
 
 const SUPABASE_URL='https://gffhlahrjwiojdewvxws.supabase.co';
 const SUPABASE_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdmZmhsYWhyandpb2pkZXd2eHdzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjY5NDA2ODYsImV4cCI6MjA4MjUxNjY4Nn0.yUdUDPYU63-70l-a2b3fqxDfb_GkX6hUveHRwaYcadc';
@@ -244,61 +244,216 @@ const Dashboard=({user,onOpenPatient})=>{
     </div>
 };
 
-// ===== AGENDA =====
-const Agenda=({user,onOpenPatient})=>{
-    const[apps,setApps]=useState([]);const[pts,setPts]=useState([]);const[users,setUsers]=useState([]);
-    const[search,setSearch]=useState('');const[showList,setShowList]=useState(false);const[tab,setTab]=useState('prox');
-    const[form,setForm]=useState({pid:'',dr:'',date:new Date().toISOString().split('T')[0],time:'',tto:''});
-    const[cond,setCond]=useState({});const[saving,setSaving]=useState(false);
+// ===== AGENDA (slots por día + calendario mensual) =====
+const SLOTS=(()=>{const r=[];for(let h=7;h<21;h++){r.push(`${String(h).padStart(2,'0')}:00`);r.push(`${String(h).padStart(2,'0')}:30`)}r.push('21:00');return r})();
+const DOW=['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
+const MONTHS=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+const ymd=d=>d.toISOString().split('T')[0];
+const parseYMD=s=>{const[y,m,d]=s.split('-').map(Number);return new Date(y,m-1,d)};
+const addDays=(d,n)=>{const x=new Date(d);x.setDate(x.getDate()+n);return x};
 
-    useEffect(()=>{load()},[]);
-    const load=async()=>{const[a,p,u]=await Promise.all([S.getApps(),S.getPatients(),S.getUsers()]);setApps(a);setPts(p);setUsers(u);const c={};for(const pt of p)c[pt.id]=await S.hasCond(pt.id);setCond(c)};
+// Modal para agendar / ver / editar cita en un slot
+const SlotModal=({slot,apps,pts,users,cond,user,onClose,onSaved})=>{
+    const existing=slot.apps||[];
+    const[mode,setMode]=useState(existing.length===0?'new':'list');
+    const[form,setForm]=useState({pid:'',dr:slot.dr||'',tto:''});
+    const[search,setSearch]=useState('');const[showList,setShowList]=useState(false);
+    const[saving,setSaving]=useState(false);
 
     const submit=async()=>{
-        if(!form.pid||!form.dr||!form.time||!form.date)return toast.warn('Complete todos los campos');
-        if(new Date(form.date+'T'+form.time)<new Date())return toast.warn('La fecha/hora ya pasó');
-        if(apps.find(a=>a.odontologo===form.dr&&a.fecha===form.date&&a.hora===form.time))return toast.warn('Horario ocupado');
+        if(!form.pid||!form.dr)return toast.warn('Complete paciente y odontólogo');
+        if(new Date(slot.date+'T'+slot.time)<new Date())return toast.warn('La fecha/hora ya pasó');
+        if(apps.find(a=>a.odontologo===form.dr&&a.fecha===slot.date&&a.hora===slot.time))return toast.warn('Ese odontólogo ya tiene cita a esa hora');
         const p=pts.find(x=>x.id===form.pid);
         if(!p)return toast.warn('Seleccione paciente');
         setSaving(true);
-        const result=await S.saveApp({paciente_id:p.id,paciente_nombre:p.nombre,paciente_ci:p.ci,odontologo:form.dr,fecha:form.date,hora:form.time,tratamiento:form.tto||'',asistio:null,deleted:false});
+        const result=await S.saveApp({paciente_id:p.id,paciente_nombre:p.nombre,paciente_ci:p.ci,odontologo:form.dr,fecha:slot.date,hora:slot.time,tratamiento:form.tto||'',asistio:null,deleted:false});
         if(result){
-            await S.saveHist({paciente_id:p.id,fecha:new Date().toLocaleDateString(),odontologo:form.dr,motivo:'CITA AGENDADA: '+form.date+' '+form.time,tipo:'CITA',deleted:false});
-            setForm({pid:'',dr:'',date:new Date().toISOString().split('T')[0],time:'',tto:''});setSearch('');
-            await load();toast.ok('Cita agendada');
+            await S.saveHist({paciente_id:p.id,fecha:new Date().toLocaleDateString(),odontologo:form.dr,motivo:'CITA AGENDADA: '+slot.date+' '+slot.time,tipo:'CITA',deleted:false});
+            toast.ok('Cita agendada');onSaved();onClose();
         }
         setSaving(false);
     };
 
-    const toggle=async(id,val)=>{const a=apps.find(x=>x.id===id);if(a){await S.saveApp({...a,asistio:val});load()}};
-    const list=tab==='prox'?apps.filter(a=>!isPast(a.fecha,a.hora)).sort((a,b)=>new Date(a.fecha+'T'+a.hora)-new Date(b.fecha+'T'+b.hora)):apps.filter(a=>isPast(a.fecha,a.hora)).sort((a,b)=>new Date(b.fecha+'T'+b.hora)-new Date(a.fecha+'T'+a.hora));
+    const toggle=async(id,val)=>{const a=apps.find(x=>x.id===id);if(a){await S.saveApp({...a,asistio:val});onSaved()}};
+    const del=async(id)=>{if(confirm('¿Eliminar cita?')){await S.delApp(id);onSaved();onClose()}};
 
-    return<div className="space-y-4 animate-fade-in">
-        <Card className="p-4">
-            <SectionTitle icon={Calendar}>Agendar Cita</SectionTitle>
-            <div className="space-y-3">
+    return<div className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4" onClick={onClose}>
+        <div className="bg-white dark:bg-slate-800 w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl p-5 max-h-[90vh] overflow-auto animate-slide-in" onClick={e=>e.stopPropagation()}>
+            <div className="flex justify-between items-center mb-3">
+                <div><h3 className="font-bold text-lg">{slot.time}</h3><p className="text-xs text-slate-500 dark:text-slate-400">{parseYMD(slot.date).toLocaleDateString('es-UY',{weekday:'long',day:'numeric',month:'long'})}</p></div>
+                <button onClick={onClose}><X size={20} className="text-slate-400"/></button>
+            </div>
+
+            {mode==='list'&&<div className="space-y-2">
+                {existing.map(a=><div key={a.id} className={`p-3 rounded-lg border ${cond[a.paciente_id]?'border-pink-300 bg-pink-50 dark:bg-pink-900/10':'border-slate-200 dark:border-slate-700'}`}>
+                    <div className="flex justify-between items-start gap-2 mb-2">
+                        <div className="min-w-0 flex-1"><p className="font-bold text-sm truncate">{a.paciente_nombre}{cond[a.paciente_id]&&<HeartPulse size={14} className="text-pink-500 inline ml-1"/>}</p><p className="text-xs text-slate-500 dark:text-slate-400">Dr. {a.odontologo}</p>{a.tratamiento&&<p className="text-xs mt-1 text-slate-600 dark:text-slate-300">{a.tratamiento}</p>}</div>
+                    </div>
+                    <div className="flex gap-1">
+                        <button onClick={()=>toggle(a.id,true)} className={`flex-1 p-2 rounded text-xs font-bold ${a.asistio===true?'bg-emerald-600 text-white':'bg-slate-100 dark:bg-slate-700 text-slate-500'}`}><UserCheck size={14} className="inline mr-1"/>Asistió</button>
+                        <button onClick={()=>toggle(a.id,false)} className={`flex-1 p-2 rounded text-xs font-bold ${a.asistio===false?'bg-red-600 text-white':'bg-slate-100 dark:bg-slate-700 text-slate-500'}`}><UserX size={14} className="inline mr-1"/>No asistió</button>
+                        <button onClick={()=>del(a.id)} className="p-2 rounded bg-red-50 dark:bg-red-900/30 text-red-500"><Trash2 size={14}/></button>
+                    </div>
+                </div>)}
+                <Btn onClick={()=>setMode('new')} variant="secondary" className="w-full py-2.5 text-sm"><PlusCircle size={14} className="inline mr-1"/>Agregar otra cita en este horario</Btn>
+            </div>}
+
+            {mode==='new'&&<div className="space-y-3">
+                {existing.length>0&&<button onClick={()=>setMode('list')} className="text-xs text-brand-600 dark:text-brand-400 flex items-center gap-1"><ChevronLeft size={14}/>Ver citas existentes</button>}
                 <div className="relative">
-                    <Input type="text" placeholder="Buscar paciente..." value={search} onChange={e=>{setSearch(e.target.value);setShowList(true)}}/>
+                    <Input type="text" placeholder="Buscar paciente..." value={search} onChange={e=>{setSearch(e.target.value);setShowList(true)}} autoFocus/>
                     {showList&&search&&<div className="absolute z-20 w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-lg max-h-40 overflow-auto">{pts.filter(p=>(p.nombre||'').toLowerCase().includes(search.toLowerCase())).map(p=><div key={p.id} onClick={()=>{setForm({...form,pid:p.id});setSearch(p.nombre);setShowList(false)}} className={`p-2.5 text-sm font-medium border-b border-slate-200 dark:border-slate-700 cursor-pointer active:bg-brand-100 dark:active:bg-brand-900/30 ${cond[p.id]?'bg-pink-50 dark:bg-pink-900/20':''}`}>{p.nombre}{cond[p.id]&&<span className="ml-2 bg-pink-500 text-white text-[8px] px-1.5 py-0.5 rounded-full">⚠️</span>}</div>)}</div>}
                 </div>
                 <Select value={form.dr} onChange={e=>setForm({...form,dr:e.target.value})}><option value="">Profesional...</option>{users.filter(u=>u.role===Role.ODONTOLOGO).map(o=><option key={o.id} value={o.name}>{o.name}</option>)}</Select>
-                <div className="grid grid-cols-2 gap-2"><Input type="date" value={form.date} min={new Date().toISOString().split('T')[0]} onChange={e=>setForm({...form,date:e.target.value})}/><Input type="time" value={form.time} onChange={e=>setForm({...form,time:e.target.value})}/></div>
-                <Textarea value={form.tto} onChange={e=>setForm({...form,tto:e.target.value})} placeholder="Descripción..." className="h-16 resize-none"/>
-                <Btn onClick={submit} disabled={saving} className="w-full py-3 text-sm">{saving?'Guardando...':'Confirmar Cita'}</Btn>
+                <Textarea value={form.tto} onChange={e=>setForm({...form,tto:e.target.value})} placeholder="Descripción (opcional)..." className="h-16 resize-none"/>
+                <div className="flex gap-2">
+                    <Btn onClick={submit} disabled={saving} className="flex-1 py-3 text-sm">{saving?'Guardando...':'Confirmar'}</Btn>
+                    <Btn onClick={onClose} variant="secondary" className="px-4 py-3 text-sm">Cancelar</Btn>
+                </div>
+            </div>}
+        </div>
+    </div>
+};
+
+// Vista de día con slots
+const DayView=({date,setDate,apps,pts,users,cond,user,drFilter,onReload})=>{
+    const[slot,setSlot]=useState(null);
+    const today=ymd(new Date());
+    const dayApps=apps.filter(a=>a.fecha===date&&(!drFilter||a.odontologo===drFilter));
+    const byTime=useMemo(()=>{const m={};for(const a of dayApps){if(!m[a.hora])m[a.hora]=[];m[a.hora].push(a)}return m},[dayApps]);
+    const now=new Date();
+    const isToday=date===today;
+
+    return<div className="space-y-3">
+        <Card className="p-3">
+            <div className="flex items-center gap-2">
+                <Btn variant="secondary" onClick={()=>setDate(ymd(addDays(parseYMD(date),-1)))} className="p-2"><ChevronLeft size={16}/></Btn>
+                <div className="flex-1 text-center min-w-0">
+                    <p className="font-bold text-sm capitalize">{parseYMD(date).toLocaleDateString('es-UY',{weekday:'long'})}</p>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">{parseYMD(date).toLocaleDateString('es-UY',{day:'numeric',month:'long',year:'numeric'})}</p>
+                </div>
+                <Btn variant="secondary" onClick={()=>setDate(ymd(addDays(parseYMD(date),1)))} className="p-2"><ChevronLeft size={16} className="rotate-180"/></Btn>
+            </div>
+            <div className="flex gap-2 mt-3">
+                <Input type="date" value={date} onChange={e=>setDate(e.target.value)} className="flex-1 py-2"/>
+                {!isToday&&<Btn onClick={()=>setDate(today)} variant="secondary" className="px-4 py-2 text-xs">Hoy</Btn>}
             </div>
         </Card>
+
         <Card className="overflow-hidden">
-            <div className="flex border-b border-slate-200 dark:border-slate-700"><button onClick={()=>setTab('prox')} className={`flex-1 py-3 text-xs font-bold ${tab==='prox'?'bg-brand-50 dark:bg-brand-900/20 text-brand-600 dark:text-brand-400 border-b-2 border-brand-600':'text-slate-400'}`}>Próximos</button><button onClick={()=>setTab('past')} className={`flex-1 py-3 text-xs font-bold ${tab==='past'?'bg-brand-50 dark:bg-brand-900/20 text-brand-600 dark:text-brand-400 border-b-2 border-brand-600':'text-slate-400'}`}>Pasados</button></div>
-            <div className="divide-y divide-slate-200 dark:divide-slate-700 max-h-[50vh] overflow-auto">
-                {list.map(a=><div key={a.id} className={`p-3 ${cond[a.paciente_id]?'bg-pink-50 dark:bg-pink-900/10 border-l-4 border-pink-500':''}`}>
-                    <div className="flex justify-between items-start gap-2">
-                        <button onClick={()=>onOpenPatient(a.paciente_id)} className="text-left flex-1 min-w-0"><p className="font-bold text-sm truncate">{a.paciente_nombre}{cond[a.paciente_id]&&<HeartPulse size={14} className="text-pink-500 inline ml-1"/>}</p><p className="text-xs text-slate-500 dark:text-slate-400">{a.fecha} {a.hora} • Dr. {a.odontologo}</p></button>
-                        <div className="flex gap-1 shrink-0"><button onClick={()=>toggle(a.id,true)} className={`p-1.5 rounded ${a.asistio===true?'bg-emerald-600 text-white':'bg-slate-100 dark:bg-slate-700 text-slate-400'}`}><UserCheck size={14}/></button><button onClick={()=>toggle(a.id,false)} className={`p-1.5 rounded ${a.asistio===false?'bg-red-600 text-white':'bg-slate-100 dark:bg-slate-700 text-slate-400'}`}><UserX size={14}/></button><button onClick={async()=>{if(confirm('¿Eliminar?')){await S.delApp(a.id);load()}}} className="p-1.5 text-red-400"><Trash2 size={14}/></button></div>
-                    </div>
-                </div>)}
-                {list.length===0&&<div className="p-8 text-center text-slate-300 dark:text-slate-600 text-xs font-bold">Sin citas</div>}
+            <div className="divide-y divide-slate-200 dark:divide-slate-700">
+                {SLOTS.map(time=>{
+                    const slotApps=byTime[time]||[];
+                    const slotDate=new Date(date+'T'+time);
+                    const past=slotDate<now;
+                    const occupied=slotApps.length>0;
+                    return<button key={time} onClick={()=>setSlot({date,time,dr:drFilter,apps:slotApps})} className={`w-full flex items-stretch text-left hover:bg-slate-50 dark:hover:bg-slate-700/30 transition-colors ${past?'opacity-60':''}`}>
+                        <div className={`w-14 shrink-0 flex items-center justify-center text-xs font-bold border-r border-slate-200 dark:border-slate-700 ${occupied?'bg-brand-50 dark:bg-brand-900/30 text-brand-700 dark:text-brand-300':'bg-slate-50 dark:bg-slate-900/50 text-slate-500 dark:text-slate-400'}`}>{time}</div>
+                        <div className="flex-1 p-2 min-h-[3rem]">
+                            {slotApps.length===0?<span className="text-[10px] text-slate-300 dark:text-slate-600 italic">Libre — tap para agendar</span>
+                            :<div className="space-y-1">{slotApps.map(a=><div key={a.id} className={`px-2 py-1 rounded text-xs flex items-center justify-between gap-2 ${a.asistio===true?'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-800 dark:text-emerald-300':a.asistio===false?'bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-300':cond[a.paciente_id]?'bg-pink-100 dark:bg-pink-900/30 text-pink-800 dark:text-pink-300':'bg-brand-100 dark:bg-brand-900/40 text-brand-800 dark:text-brand-200'}`}>
+                                <div className="min-w-0 flex-1"><p className="font-bold truncate">{a.paciente_nombre}{cond[a.paciente_id]&&<HeartPulse size={10} className="text-pink-500 inline ml-1"/>}</p><p className="text-[9px] opacity-80 truncate">Dr. {a.odontologo}</p></div>
+                                {a.asistio===true&&<UserCheck size={12} className="shrink-0"/>}
+                                {a.asistio===false&&<UserX size={12} className="shrink-0"/>}
+                            </div>)}</div>}
+                        </div>
+                    </button>
+                })}
             </div>
         </Card>
+
+        {slot&&<SlotModal slot={slot} apps={apps} pts={pts} users={users} cond={cond} user={user} onClose={()=>setSlot(null)} onSaved={onReload}/>}
+    </div>
+};
+
+// Vista mensual
+const MonthView=({apps,onPickDay})=>{
+    const[cursor,setCursor]=useState(()=>{const d=new Date();return new Date(d.getFullYear(),d.getMonth(),1)});
+    const year=cursor.getFullYear(),month=cursor.getMonth();
+    const today=ymd(new Date());
+    const firstDay=new Date(year,month,1).getDay(); // 0=Dom
+    const daysInMonth=new Date(year,month+1,0).getDate();
+    // Construir grilla: 6 semanas x 7 días
+    const cells=[];
+    for(let i=0;i<firstDay;i++)cells.push(null);
+    for(let d=1;d<=daysInMonth;d++)cells.push(new Date(year,month,d));
+    while(cells.length<42)cells.push(null);
+
+    const countByDate=useMemo(()=>{const m={};for(const a of apps){m[a.fecha]=(m[a.fecha]||0)+1}return m},[apps]);
+    const prev=()=>setCursor(new Date(year,month-1,1));
+    const next=()=>setCursor(new Date(year,month+1,1));
+    const goToday=()=>setCursor(()=>{const d=new Date();return new Date(d.getFullYear(),d.getMonth(),1)});
+
+    return<div className="space-y-3">
+        <Card className="p-3">
+            <div className="flex items-center gap-2">
+                <Btn variant="secondary" onClick={prev} className="p-2"><ChevronLeft size={16}/></Btn>
+                <div className="flex-1 text-center">
+                    <p className="font-bold text-sm capitalize">{MONTHS[month]} {year}</p>
+                </div>
+                <Btn variant="secondary" onClick={next} className="p-2"><ChevronLeft size={16} className="rotate-180"/></Btn>
+                <Btn variant="secondary" onClick={goToday} className="px-3 py-2 text-xs">Hoy</Btn>
+            </div>
+        </Card>
+        <Card className="p-2">
+            <div className="grid grid-cols-7 gap-1 mb-1">
+                {DOW.map(d=><div key={d} className="text-center text-[10px] font-bold text-slate-400 py-1">{d}</div>)}
+            </div>
+            <div className="grid grid-cols-7 gap-1">
+                {cells.map((d,i)=>{
+                    if(!d)return<div key={i}/>;
+                    const ds=ymd(d);
+                    const count=countByDate[ds]||0;
+                    const isToday=ds===today;
+                    const dow=d.getDay();
+                    const clickable=dow>=1&&dow<=6; // L-S
+                    const isSunday=dow===0;
+                    return<button key={i} disabled={!clickable} onClick={()=>clickable&&onPickDay(ds)} className={`aspect-square rounded-lg flex flex-col items-center justify-center relative text-xs font-bold transition-colors
+                        ${isToday?'bg-brand-600 text-white':
+                          !clickable?'text-slate-300 dark:text-slate-700 cursor-not-allowed':
+                          count>0?'bg-brand-50 dark:bg-brand-900/30 text-brand-700 dark:text-brand-300 hover:bg-brand-100 dark:hover:bg-brand-900/50':
+                          'hover:bg-slate-100 dark:hover:bg-slate-700/50 text-slate-700 dark:text-slate-300'}
+                        ${isSunday&&!isToday?'opacity-60':''}`}>
+                        <span>{d.getDate()}</span>
+                        {count>0&&<span className={`absolute bottom-1 text-[8px] px-1 rounded-full ${isToday?'bg-white/30':'bg-brand-600 text-white'}`}>{count}</span>}
+                    </button>
+                })}
+            </div>
+        </Card>
+        <p className="text-[10px] text-center text-slate-400">Tap en un día (L a S) para ver/agendar</p>
+    </div>
+};
+
+const Agenda=({user,onOpenPatient})=>{
+    const[tab,setTab]=useState('dia');
+    const[date,setDate]=useState(ymd(new Date()));
+    const[drFilter,setDrFilter]=useState('');
+    const[apps,setApps]=useState([]);const[pts,setPts]=useState([]);const[users,setUsers]=useState([]);
+    const[cond,setCond]=useState({});
+
+    useEffect(()=>{load()},[]);
+    const load=async()=>{const[a,p,u]=await Promise.all([S.getApps(),S.getPatients(),S.getUsers()]);setApps(a);setPts(p);setUsers(u);const c={};for(const pt of p)c[pt.id]=await S.hasCond(pt.id);setCond(c)};
+
+    const odontologos=users.filter(u=>u.role===Role.ODONTOLOGO);
+
+    return<div className="space-y-3 animate-fade-in">
+        <div className="flex gap-2">
+            <Btn onClick={()=>setTab('dia')} variant={tab==='dia'?'primary':'secondary'} className="flex-1 py-2 text-xs"><Clock size={14} className="inline mr-1"/>Día</Btn>
+            <Btn onClick={()=>setTab('mes')} variant={tab==='mes'?'primary':'secondary'} className="flex-1 py-2 text-xs"><Calendar size={14} className="inline mr-1"/>Mes</Btn>
+        </div>
+
+        {tab==='dia'&&<>
+            {odontologos.length>0&&<Card className="p-3">
+                <Select value={drFilter} onChange={e=>setDrFilter(e.target.value)}>
+                    <option value="">Todos los odontólogos</option>
+                    {odontologos.map(o=><option key={o.id} value={o.name}>{o.name}</option>)}
+                </Select>
+            </Card>}
+            <DayView date={date} setDate={setDate} apps={apps} pts={pts} users={users} cond={cond} user={user} drFilter={drFilter} onReload={load}/>
+        </>}
+
+        {tab==='mes'&&<MonthView apps={apps} onPickDay={d=>{setDate(d);setTab('dia')}}/>}
     </div>
 };
 
