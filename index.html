@@ -585,13 +585,24 @@ const PatientResumen=({patient,medRec,hist,apps,saldo,onGoTab})=>{
             <p className="text-[10px] text-slate-400">{ultEvo.fecha} • Dr. {ultEvo.odontologo}</p>
             <p className="text-sm mt-1">{ultEvo.motivo}</p>
         </Card>}
-        {medRec&&<Card className="p-4">
-            <SectionTitle icon={FileHeart} color="text-pink-600 dark:text-pink-400">Datos médicos relevantes</SectionTitle>
-            {medRec.alergias?.length>0&&<p className="text-xs mb-1"><span className="font-bold text-red-600 dark:text-red-400">Alergias:</span> {medRec.alergias.join(', ')}</p>}
-            {medRec.alergias_medicamentos?.length>0&&<p className="text-xs mb-1"><span className="font-bold text-orange-600 dark:text-orange-400">Alergias a medicamentos:</span> {medRec.alergias_medicamentos.join(', ')}</p>}
-            {medRec.medicacion_actual?.length>0&&<p className="text-xs mb-1"><span className="font-bold text-emerald-600 dark:text-emerald-400">Medicación:</span> {medRec.medicacion_actual.map(m=>m.nombre+(m.dosis?` (${m.dosis})`:'')).join(', ')}</p>}
-            {!medRec.alergias?.length&&!medRec.alergias_medicamentos?.length&&!medRec.medicacion_actual?.length&&<p className="text-xs text-slate-400">Sin datos médicos relevantes</p>}
-        </Card>}
+        {medRec&&(()=>{
+            const cap=s=>s.charAt(0).toUpperCase()+s.slice(1);
+            const activos=o=>Object.entries(o||{}).filter(([k,v])=>k!=='otros'&&v===true).map(([k])=>cap(k));
+            const persActivos=activos(medRec.antecedentes_personales);
+            const famActivos=activos(medRec.antecedentes_familiares);
+            const hasAny=medRec.alergias?.length>0||medRec.alergias_medicamentos?.length>0||medRec.medicacion_actual?.length>0||persActivos.length>0||famActivos.length>0||medRec.observaciones?.trim();
+            return<Card className="p-4">
+                <SectionTitle icon={FileHeart} color="text-pink-600 dark:text-pink-400">Datos médicos relevantes</SectionTitle>
+                {medRec.alergias?.length>0&&<p className="text-xs mb-1"><span className="font-bold text-red-600 dark:text-red-400">Alergias:</span> {medRec.alergias.join(', ')}</p>}
+                {medRec.alergias_medicamentos?.length>0&&<p className="text-xs mb-1"><span className="font-bold text-orange-600 dark:text-orange-400">Alergias a medicamentos:</span> {medRec.alergias_medicamentos.join(', ')}</p>}
+                {medRec.medicacion_actual?.length>0&&<p className="text-xs mb-1"><span className="font-bold text-emerald-600 dark:text-emerald-400">Medicación:</span> {medRec.medicacion_actual.map(m=>m.nombre+(m.dosis?` (${m.dosis})`:'')).join(', ')}</p>}
+                {persActivos.length>0&&<p className="text-xs mb-1"><span className="font-bold text-blue-600 dark:text-blue-400">Antecedentes personales:</span> {persActivos.join(', ')}</p>}
+                {famActivos.length>0&&<p className="text-xs mb-1"><span className="font-bold text-purple-600 dark:text-purple-400">Antecedentes familiares:</span> {famActivos.join(', ')}</p>}
+                {medRec.observaciones?.trim()&&<p className="text-xs mb-1"><span className="font-bold text-slate-600 dark:text-slate-300">Observaciones:</span> {medRec.observaciones}</p>}
+                {!hasAny&&<p className="text-xs text-slate-400">Sin datos médicos relevantes</p>}
+                {medRec.fecha_actualizacion&&<p className="text-[10px] text-slate-400 mt-2 italic">Última actualización: {medRec.fecha_actualizacion}</p>}
+            </Card>
+        })()}
         <div className="grid grid-cols-2 gap-2">
             <Btn onClick={()=>onGoTab('historia')} variant="secondary" className="py-3 text-xs"><FileText size={14} className="inline mr-1"/>Historia</Btn>
             <Btn onClick={()=>onGoTab('ficha')} variant="secondary" className="py-3 text-xs"><FileHeart size={14} className="inline mr-1"/>Ficha</Btn>
