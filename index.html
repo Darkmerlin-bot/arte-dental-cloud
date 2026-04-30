@@ -470,37 +470,275 @@ const Agenda=({user,onOpenPatient})=>{
 };
 
 // ===== ODONTOGRAMA =====
-const TOOTH_STATES={
+// Estados que se pintan sobre toda la pieza
+const TOOTH_WHOLE={
     sano:{color:'#ffffff',border:'#94a3b8',label:'Sano',dark:false},
-    caries:{color:'#ef4444',border:'#b91c1c',label:'Caries',dark:true},
-    restaurado:{color:'#3b82f6',border:'#1e40af',label:'Restaurado',dark:true},
     endodoncia:{color:'#f59e0b',border:'#b45309',label:'Endodoncia',dark:true},
     corona:{color:'#a855f7',border:'#7e22ce',label:'Corona',dark:true},
+    carilla:{color:'#ec4899',border:'#9d174d',label:'Carilla',dark:true},
+    inlay:{color:'#06b6d4',border:'#0e7490',label:'Inlay',dark:true},
+    onlay:{color:'#0891b2',border:'#155e75',label:'Onlay',dark:true},
+    overlay:{color:'#0e7490',border:'#0c4a6e',label:'Overlay',dark:true},
+    perno:{color:'#7c3aed',border:'#5b21b6',label:'Perno muñón',dark:true},
     implante:{color:'#10b981',border:'#047857',label:'Implante',dark:true},
+    puente:{color:'#facc15',border:'#a16207',label:'Puente',dark:true},
+    extraccion_planificada:{color:'#fb923c',border:'#c2410c',label:'Extracción planificada',dark:true},
     extraccion:{color:'#6b7280',border:'#374151',label:'A extraer',dark:true},
-    ausente:{color:'#1f2937',border:'#000',label:'Ausente',dark:true}
+    ausente:{color:'#1f2937',border:'#000',label:'Ausente',dark:true},
+    inflamacion:{color:'#dc2626',border:'#7f1d1d',label:'Inflamación periapical',dark:true,marker:'•'}
 };
+
+// Estados que se pintan en una cara específica
+const TOOTH_FACE={
+    sano:{color:'#ffffff',border:'#cbd5e1',label:'Sin lesión',dark:false},
+    caries:{color:'#ef4444',border:'#b91c1c',label:'Caries',dark:true},
+    caries_incipiente:{color:'#fca5a5',border:'#b91c1c',label:'Caries incipiente',dark:false},
+    caries_secundaria:{color:'#dc2626',border:'#7f1d1d',label:'Caries secundaria',dark:true},
+    pigmento:{color:'#a78bfa',border:'#5b21b6',label:'Pigmento',dark:true},
+    composite:{color:'#3b82f6',border:'#1e40af',label:'Obt. composite',dark:true},
+    amalgama:{color:'#94a3b8',border:'#475569',label:'Obt. amalgama',dark:true},
+    temporal:{color:'#67e8f9',border:'#0e7490',label:'Obt. temporal',dark:true}
+};
+
+// Tipos de corona (etiqueta corta sobre el diente)
+const CROWN_TYPES={
+    MK:'Cerámica metálica',
+    Zr:'Cerámica de circonio',
+    Kz:'Cerámica de composite',
+    M:'Metálica',
+    A:'Acrílico',
+    PM:'PMMA'
+};
+
+const FACE_LABELS={oclusal:'Oclusal/Incisal',vestibular:'Vestibular',lingual:'Lingual/Palatina',mesial:'Mesial',distal:'Distal'};
 const UPPER=[18,17,16,15,14,13,12,11,21,22,23,24,25,26,27,28];
 const LOWER=[48,47,46,45,44,43,42,41,31,32,33,34,35,36,37,38];
+const UPPER_PED=[55,54,53,52,51,61,62,63,64,65];
+const LOWER_PED=[85,84,83,82,81,71,72,73,74,75];
 
-const Odontogram=({value,onChange,onSave})=>{
-    const[sel,setSel]=useState(null);
-    const getState=n=>value?.[n]||'sano';
-    const setState=(n,s)=>{onChange({...(value||{}),[n]:s});setSel(null)};
-    const Tooth=({n})=>{const st=TOOTH_STATES[getState(n)];return<div className="flex flex-col items-center gap-0.5"><span className="text-[8px] text-slate-400 font-bold">{n}</span><div className="tooth w-7 h-9 rounded-md flex items-center justify-center text-[9px] font-bold" style={{background:st.color,border:`2px solid ${st.border}`,color:st.dark?'#fff':'#64748b'}} onClick={()=>setSel(n)}>🦷</div></div>};
+// Normaliza un valor de pieza al formato nuevo {general, caras: {oclusal, vestibular...}, corona_tipo}
+const normTooth=v=>{
+    if(!v)return{general:'sano',caras:{}};
+    if(typeof v==='string')return{general:v,caras:{}};
+    return{general:v.general||'sano',caras:v.caras||{},corona_tipo:v.corona_tipo};
+};
 
-    return<Card className="p-4">
-        <div className="flex justify-between items-center mb-3"><SectionTitle>Odontograma (FDI)</SectionTitle><Btn onClick={onSave} className="text-xs px-3 py-1">Guardar</Btn></div>
-        <div className="overflow-x-auto">
-            <div className="min-w-[520px] space-y-2">
-                <div className="flex justify-center gap-1">{UPPER.map(n=><Tooth key={n} n={n}/>)}</div>
-                <div className="border-t border-dashed border-slate-300 dark:border-slate-600 my-1"/>
-                <div className="flex justify-center gap-1">{LOWER.map(n=><Tooth key={n} n={n}/>)}</div>
-            </div>
+// SVG de un diente con 5 caras clickeables + indicador de selección múltiple
+const ToothSVG=({n,data,onClick,selected})=>{
+    const t=normTooth(data);
+    const whole=TOOTH_WHOLE[t.general]||TOOTH_WHOLE.sano;
+    const fc=face=>(TOOTH_FACE[t.caras[face]]||TOOTH_FACE.sano);
+    const isGone=t.general==='ausente';
+    const isExtraer=t.general==='extraccion';
+    const wholeColored=t.general!=='sano'&&!['extraccion_planificada'].includes(t.general);
+
+    return<g style={{cursor:'pointer'}} onClick={e=>onClick(n,'general',e)}>
+        <polygon points="0,0 40,0 28,12 12,12" fill={fc('vestibular').color} stroke="#64748b" strokeWidth="0.5" onClick={e=>{e.stopPropagation();onClick(n,'vestibular',e)}}/>
+        <polygon points="0,40 40,40 28,28 12,28" fill={fc('lingual').color} stroke="#64748b" strokeWidth="0.5" onClick={e=>{e.stopPropagation();onClick(n,'lingual',e)}}/>
+        <polygon points="0,0 0,40 12,28 12,12" fill={fc('mesial').color} stroke="#64748b" strokeWidth="0.5" onClick={e=>{e.stopPropagation();onClick(n,'mesial',e)}}/>
+        <polygon points="40,0 40,40 28,28 28,12" fill={fc('distal').color} stroke="#64748b" strokeWidth="0.5" onClick={e=>{e.stopPropagation();onClick(n,'distal',e)}}/>
+        <rect x="12" y="12" width="16" height="16" fill={fc('oclusal').color} stroke="#64748b" strokeWidth="0.5" onClick={e=>{e.stopPropagation();onClick(n,'oclusal',e)}}/>
+
+        {wholeColored&&!isGone&&!isExtraer&&<rect x="0" y="0" width="40" height="40" fill={whole.color} fillOpacity="0.55" stroke={whole.border} strokeWidth="2" pointerEvents="none"/>}
+        {isExtraer&&<><line x1="2" y1="2" x2="38" y2="38" stroke="#dc2626" strokeWidth="3" pointerEvents="none"/><line x1="38" y1="2" x2="2" y2="38" stroke="#dc2626" strokeWidth="3" pointerEvents="none"/></>}
+        {isGone&&<rect x="0" y="0" width="40" height="40" fill="#1f2937" pointerEvents="none"/>}
+        {t.general==='inflamacion'&&<circle cx="20" cy="38" r="3" fill="#dc2626" pointerEvents="none"/>}
+        {t.general==='implante'&&<rect x="17" y="-2" width="6" height="12" fill="#10b981" stroke="#047857" pointerEvents="none"/>}
+        {selected&&<rect x="0" y="0" width="40" height="40" fill="none" stroke="#4f46e5" strokeWidth="3" strokeDasharray="4 2" pointerEvents="none"/>}
+    </g>
+};
+
+const Odontogram=({value,onChange,onSave,patient,hist,users,user,onHistReload})=>{
+    const[denticion,setDenticion]=useState('adulto'); // 'adulto'|'pediatrico'
+    const[multi,setMulti]=useState(false);
+    const[selPiezas,setSelPiezas]=useState(new Set()); // para modo múltiple
+    const[brush,setBrush]=useState(null); // {kind:'general'|'face'|'corona', state:'caries'/'corona'/etc, coronaTipo?}
+    const[noteFilter,setNoteFilter]=useState('todas');
+    const[noteForm,setNoteForm]=useState({pieza:'',cara:'',texto:''});
+    const[generalForm,setGeneralForm]=useState({texto:'',dr:user?.role===Role.ODONTOLOGO?user.name:''});
+    const[showGeneral,setShowGeneral]=useState(false);
+
+    const PIEZAS_UP=denticion==='adulto'?UPPER:UPPER_PED;
+    const PIEZAS_LO=denticion==='adulto'?LOWER:LOWER_PED;
+    const PIEZAS_ALL=[...PIEZAS_UP,...PIEZAS_LO];
+
+    // Aplica un brush a una pieza+cara
+    const applyBrush=(n,target)=>{
+        if(!brush){
+            // Si no hay pincel, en modo múltiple solo selecciona; en individual abre modal viejo (deshabilitado en este rediseño - sólo selecciona)
+            if(multi){
+                setSelPiezas(s=>{const x=new Set(s);x.has(n)?x.delete(n):x.add(n);return x});
+            }
+            return;
+        }
+        const piezas=multi&&selPiezas.size>0?Array.from(selPiezas):[n];
+        const newVal={...(value||{})};
+        for(const p of piezas){
+            const cur=normTooth(newVal[p]);
+            let next={...cur};
+            if(brush.kind==='general'){next.general=brush.state;next.corona_tipo=undefined}
+            else if(brush.kind==='corona'){next.general='corona';next.corona_tipo=brush.coronaTipo}
+            else if(brush.kind==='face'){
+                const face=target==='general'?'oclusal':target;
+                next.caras={...cur.caras,[face]:brush.state};
+            }
+            // limpieza
+            const isClean=next.general==='sano'&&Object.values(next.caras||{}).every(v=>!v||v==='sano');
+            if(isClean)delete newVal[p]; else newVal[p]=next;
+        }
+        onChange(newVal);
+        if(!multi)setSelPiezas(new Set());
+    };
+
+    const togglePiezaSel=(n)=>setSelPiezas(s=>{const x=new Set(s);x.has(n)?x.delete(n):x.add(n);return x});
+    const clearAll=()=>{setSelPiezas(new Set());setBrush(null)};
+    const switchToMulti=v=>{setMulti(v);if(!v)setSelPiezas(new Set())};
+
+    const Tooth=({n})=>{
+        const t=normTooth((value||{})[n]);
+        return<div className="flex flex-col items-center gap-0.5 select-none">
+            <span className="text-[8px] text-slate-400 font-bold h-3">{t.corona_tipo||''}</span>
+            <span className="text-[8px] text-slate-400 font-bold">{n}</span>
+            <svg viewBox="0 0 40 40" width="32" height="32" className="hover:scale-110 transition-transform">
+                <ToothSVG n={n} data={t} selected={selPiezas.has(n)} onClick={(num,target)=>applyBrush(num,target)}/>
+            </svg>
         </div>
-        <div className="mt-3 grid grid-cols-4 gap-1 text-[9px]">{Object.entries(TOOTH_STATES).map(([k,v])=><div key={k} className="flex items-center gap-1"><div className="w-3 h-3 rounded" style={{background:v.color,border:`1px solid ${v.border}`}}/><span>{v.label}</span></div>)}</div>
-        {sel&&<Portal><div className="fixed inset-0 bg-black/60 z-[200] flex items-center justify-center p-4" onClick={()=>setSel(null)}><div className="bg-white dark:bg-slate-800 rounded-xl p-4 max-w-xs w-full" onClick={e=>e.stopPropagation()}><h4 className="font-bold text-sm mb-2">Pieza {sel}</h4><div className="grid grid-cols-2 gap-2">{Object.entries(TOOTH_STATES).map(([k,v])=><button key={k} onClick={()=>setState(sel,k)} className="p-2 rounded-lg border-2 text-xs font-bold" style={{background:v.color,borderColor:v.border,color:v.dark?'#fff':'#1f2937'}}>{v.label}</button>)}</div></div></div></Portal>}
-    </Card>
+    };
+
+    // Notas: se filtran de hist las que tienen formato [Pieza N]
+    const notasOdo=useMemo(()=>{
+        if(!hist)return[];
+        return hist.filter(h=>h.tipo==='EVOLUCION'&&/^\[Pieza\s+(\d+)/.test(h.motivo||''));
+    },[hist]);
+    const notasFiltradas=useMemo(()=>noteFilter==='todas'?notasOdo:notasOdo.filter(n=>{const m=/^\[Pieza\s+(\d+)/.exec(n.motivo);return m&&m[1]===String(noteFilter)}),[notasOdo,noteFilter]);
+
+    const piezasConNotas=useMemo(()=>{const s=new Set();for(const n of notasOdo){const m=/^\[Pieza\s+(\d+)/.exec(n.motivo);if(m)s.add(m[1])}return Array.from(s).sort()},[notasOdo]);
+
+    const saveNota=async()=>{
+        if(!noteForm.pieza||!noteForm.texto)return toast.warn('Seleccione pieza y escriba la nota');
+        const dr=user?.role===Role.ODONTOLOGO?user.name:(generalForm.dr||'Sistema');
+        const motivo=`[Pieza ${noteForm.pieza}${noteForm.cara?` - ${FACE_LABELS[noteForm.cara]||noteForm.cara}`:''}] ${noteForm.texto}`;
+        const r=await S.saveHist({paciente_id:patient.id,fecha:new Date().toLocaleDateString(),odontologo:dr,motivo,tipo:'EVOLUCION',deleted:false});
+        if(r){setNoteForm({pieza:'',cara:'',texto:''});toast.ok('Nota guardada');if(onHistReload)onHistReload()}
+    };
+
+    const saveGeneral=async()=>{
+        if(!generalForm.texto)return toast.warn('Escriba el tratamiento');
+        if(!generalForm.dr)return toast.warn('Seleccione odontólogo');
+        const r=await S.saveHist({paciente_id:patient.id,fecha:new Date().toLocaleDateString(),odontologo:generalForm.dr,motivo:generalForm.texto,tipo:'EVOLUCION',deleted:false});
+        if(r){setGeneralForm({texto:'',dr:user?.role===Role.ODONTOLOGO?user.name:''});setShowGeneral(false);toast.ok('Tratamiento guardado');if(onHistReload)onHistReload()}
+    };
+
+    const delNota=async h=>{if(!confirm('¿Eliminar esta nota?'))return;await DB.update('history',h.id,{deleted:true});if(onHistReload)onHistReload()};
+
+    // Helper: elegir un brush
+    const BrushBtn=({kind,state,label,color,border,dark,coronaTipo})=>{
+        const isActive=brush&&brush.kind===kind&&brush.state===state&&(coronaTipo?brush.coronaTipo===coronaTipo:true);
+        return<button onClick={()=>setBrush(isActive?null:{kind,state,coronaTipo})} className={`p-1.5 rounded-md border-2 text-[9px] font-bold transition-all ${isActive?'ring-2 ring-brand-500 ring-offset-1 dark:ring-offset-slate-800':''}`} style={{background:color,borderColor:border,color:dark?'#fff':'#1f2937'}}>{label}</button>;
+    };
+
+    return<div className="space-y-3 animate-fade-in">
+        {/* Header con switches y guardar */}
+        <Card className="p-3">
+            <div className="flex flex-wrap gap-2 items-center justify-between">
+                <div className="flex gap-2 items-center flex-wrap">
+                    <div className="flex bg-slate-100 dark:bg-slate-700 rounded-lg p-0.5">
+                        <button onClick={()=>setDenticion('adulto')} className={`px-3 py-1.5 rounded text-[11px] font-bold ${denticion==='adulto'?'bg-white dark:bg-slate-900 shadow text-brand-600 dark:text-brand-400':'text-slate-500 dark:text-slate-400'}`}>Adulto</button>
+                        <button onClick={()=>setDenticion('pediatrico')} className={`px-3 py-1.5 rounded text-[11px] font-bold ${denticion==='pediatrico'?'bg-white dark:bg-slate-900 shadow text-brand-600 dark:text-brand-400':'text-slate-500 dark:text-slate-400'}`}>Pediátrico</button>
+                    </div>
+                    <label className="flex items-center gap-1.5 text-[11px] font-bold text-slate-600 dark:text-slate-300 cursor-pointer">
+                        <input type="checkbox" checked={multi} onChange={e=>switchToMulti(e.target.checked)} className="accent-brand-600"/>
+                        Selección múltiple {multi&&selPiezas.size>0&&<span className="bg-brand-600 text-white px-1.5 py-0.5 rounded-full text-[9px]">{selPiezas.size}</span>}
+                    </label>
+                    {(brush||selPiezas.size>0)&&<button onClick={clearAll} className="text-[10px] text-red-500 hover:underline font-bold">✕ Limpiar</button>}
+                </div>
+                <Btn onClick={onSave} className="text-xs px-3 py-1.5"><Save size={12} className="inline mr-1"/>Guardar</Btn>
+            </div>
+            {brush&&<p className="text-[10px] text-brand-600 dark:text-brand-400 mt-2 font-bold">🖌️ Pincel activo: {brush.kind==='corona'?`Corona ${brush.coronaTipo}`:(TOOTH_WHOLE[brush.state]||TOOTH_FACE[brush.state])?.label} — Tap en {brush.kind==='face'?'una cara':'el diente'}{multi?'s seleccionados':''}</p>}
+            {!brush&&<p className="text-[10px] text-slate-400 mt-2">{multi?'Tap en piezas para seleccionarlas, después elegí un estado de la paleta':'Elegí un estado de la paleta y luego tap en una pieza'}</p>}
+        </Card>
+
+        <div className="lg:grid lg:grid-cols-[180px_1fr_280px] lg:gap-3 space-y-3 lg:space-y-0">
+            {/* Paleta de estados */}
+            <Card className="p-3 lg:max-h-[80vh] lg:overflow-y-auto">
+                <p className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase mb-2">Paleta</p>
+                <details open className="mb-2"><summary className="cursor-pointer text-[10px] font-bold text-brand-600 dark:text-brand-400 mb-1">Por cara</summary>
+                    <div className="grid grid-cols-2 gap-1">{Object.entries(TOOTH_FACE).map(([k,v])=><BrushBtn key={k} kind="face" state={k} label={v.label} color={v.color} border={v.border} dark={v.dark}/>)}</div>
+                </details>
+                <details open className="mb-2"><summary className="cursor-pointer text-[10px] font-bold text-brand-600 dark:text-brand-400 mb-1">Diente entero</summary>
+                    <div className="grid grid-cols-1 gap-1">{Object.entries(TOOTH_WHOLE).filter(([k])=>k!=='corona').map(([k,v])=><BrushBtn key={k} kind="general" state={k} label={v.label} color={v.color} border={v.border} dark={v.dark}/>)}</div>
+                </details>
+                <details className="mb-2"><summary className="cursor-pointer text-[10px] font-bold text-brand-600 dark:text-brand-400 mb-1">Coronas</summary>
+                    <div className="grid grid-cols-2 gap-1">{Object.entries(CROWN_TYPES).map(([k,v])=><BrushBtn key={k} kind="corona" state="corona" coronaTipo={k} label={k} color="#a855f7" border="#7e22ce" dark={true}/>)}</div>
+                </details>
+            </Card>
+
+            {/* Odontograma */}
+            <Card className="p-3 overflow-x-auto">
+                <div className="min-w-[600px] space-y-1">
+                    <div className="flex justify-center gap-1 flex-wrap">{PIEZAS_UP.map(n=><Tooth key={n} n={n}/>)}</div>
+                    <div className="border-t border-dashed border-slate-300 dark:border-slate-600 my-2"/>
+                    <div className="flex justify-center gap-1 flex-wrap">{PIEZAS_LO.map(n=><Tooth key={n} n={n}/>)}</div>
+                </div>
+            </Card>
+
+            {/* Panel de notas */}
+            <Card className="p-3 lg:max-h-[80vh] lg:overflow-y-auto">
+                <p className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase mb-2">Notas / Tratamientos</p>
+
+                {/* Form para nota nueva */}
+                <div className="space-y-2 mb-3 pb-3 border-b border-slate-200 dark:border-slate-700">
+                    <Select value={noteForm.pieza} onChange={e=>setNoteForm({...noteForm,pieza:e.target.value})} className="text-xs py-1.5">
+                        <option value="">Pieza...</option>
+                        {selPiezas.size===1&&<option value={Array.from(selPiezas)[0]}>Pieza {Array.from(selPiezas)[0]} (seleccionada)</option>}
+                        {PIEZAS_ALL.map(n=><option key={n} value={n}>Pieza {n}</option>)}
+                    </Select>
+                    <Select value={noteForm.cara} onChange={e=>setNoteForm({...noteForm,cara:e.target.value})} className="text-xs py-1.5">
+                        <option value="">Sin cara específica</option>
+                        {Object.entries(FACE_LABELS).map(([k,v])=><option key={k} value={k}>{v}</option>)}
+                    </Select>
+                    <Textarea value={noteForm.texto} onChange={e=>setNoteForm({...noteForm,texto:e.target.value})} placeholder="Nota / tratamiento..." className="h-14 resize-none text-xs"/>
+                    <Btn onClick={saveNota} className="w-full py-1.5 text-[11px]">+ Agregar nota</Btn>
+                    <Btn onClick={()=>setShowGeneral(s=>!s)} variant="secondary" className="w-full py-1.5 text-[11px]">{showGeneral?'✕ Cancelar':'+ Tratamiento general (sin pieza)'}</Btn>
+                    {showGeneral&&<div className="space-y-2 p-2 bg-slate-50 dark:bg-slate-700/30 rounded-lg">
+                        <Select value={generalForm.dr} onChange={e=>setGeneralForm({...generalForm,dr:e.target.value})} className="text-xs py-1.5"><option value="">Odontólogo...</option>{(users||[]).map(u=><option key={u.id} value={u.name}>{u.name}</option>)}</Select>
+                        <Textarea value={generalForm.texto} onChange={e=>setGeneralForm({...generalForm,texto:e.target.value})} placeholder="Ej: Limpieza, profilaxis, fluorización..." className="h-14 resize-none text-xs"/>
+                        <Btn onClick={saveGeneral} variant="success" className="w-full py-1.5 text-[11px]">Guardar</Btn>
+                    </div>}
+                </div>
+
+                {/* Filtro y lista */}
+                <Select value={noteFilter} onChange={e=>setNoteFilter(e.target.value)} className="text-xs py-1.5 mb-2">
+                    <option value="todas">Todas las piezas</option>
+                    {piezasConNotas.map(p=><option key={p} value={p}>Pieza {p}</option>)}
+                </Select>
+                <div className="space-y-2">
+                    {notasFiltradas.map(n=>{const m=/^\[Pieza\s+(\d+)([^\]]*)\]\s*(.*)$/s.exec(n.motivo);const pieza=m?m[1]:'';const sub=m?m[2]:'';const txt=m?m[3]:n.motivo;return<div key={n.id} className="bg-slate-50 dark:bg-slate-700/30 p-2 rounded-lg text-[11px]">
+                        <div className="flex justify-between items-start gap-1 mb-1">
+                            <div className="min-w-0 flex-1">
+                                <p className="font-bold text-brand-600 dark:text-brand-400">Pieza {pieza}{sub.replace(' - ',' › ')}</p>
+                                <p className="text-[9px] text-slate-400">{n.fecha} · Dr. {n.odontologo}</p>
+                            </div>
+                            <button onClick={()=>delNota(n)} className="text-red-400 shrink-0 p-1"><Trash2 size={11}/></button>
+                        </div>
+                        <p className="text-slate-700 dark:text-slate-200">{txt}</p>
+                    </div>})}
+                    {notasFiltradas.length===0&&<p className="text-[10px] text-slate-400 text-center py-3">{noteFilter==='todas'?'Sin notas registradas':'Sin notas para esta pieza'}</p>}
+                </div>
+            </Card>
+        </div>
+
+        {/* Leyenda colapsable */}
+        <Card className="p-3">
+            <details><summary className="cursor-pointer text-[11px] font-bold text-slate-500 dark:text-slate-400">Ver leyenda completa</summary>
+                <div className="space-y-2 mt-2">
+                    <div><p className="text-[10px] font-bold text-slate-500 dark:text-slate-400 mb-1 uppercase">Por cara</p><div className="grid grid-cols-2 sm:grid-cols-4 gap-1 text-[9px]">{Object.entries(TOOTH_FACE).map(([k,v])=><div key={k} className="flex items-center gap-1"><div className="w-3 h-3 rounded" style={{background:v.color,border:`1px solid ${v.border}`}}/><span>{v.label}</span></div>)}</div></div>
+                    <div><p className="text-[10px] font-bold text-slate-500 dark:text-slate-400 mb-1 uppercase">Por diente entero</p><div className="grid grid-cols-2 sm:grid-cols-4 gap-1 text-[9px]">{Object.entries(TOOTH_WHOLE).map(([k,v])=><div key={k} className="flex items-center gap-1"><div className="w-3 h-3 rounded" style={{background:v.color,border:`1px solid ${v.border}`}}/><span>{v.label}</span></div>)}</div></div>
+                    <div><p className="text-[10px] font-bold text-slate-500 dark:text-slate-400 mb-1 uppercase">Tipos de corona</p><div className="grid grid-cols-2 sm:grid-cols-3 gap-1 text-[9px]">{Object.entries(CROWN_TYPES).map(([k,v])=><div key={k} className="flex items-center gap-1"><span className="font-bold text-purple-600 dark:text-purple-400 w-6">{k}</span><span>{v}</span></div>)}</div></div>
+                </div>
+            </details>
+        </Card>
+    </div>
 };
 
 // ===== HUB DE PACIENTE (centralizado) =====
@@ -544,61 +782,90 @@ const PatientHub=({user,patientId,onBack})=>{
 
     const hasAlerts=medRec&&(medRec.alergias?.length>0||medRec.alergias_medicamentos?.length>0);
     const saldo=Math.max(0,(patient.presupuesto||0)-(patient.abonado||0));
+    const proxCita=apps.filter(a=>!isPast(a.fecha,a.hora)).sort((a,b)=>new Date(a.fecha+'T'+a.hora)-new Date(b.fecha+'T'+b.hora))[0];
+    const edad=calcEdad(patient.fecha_nacimiento);
 
-    return<div className="space-y-4 animate-fade-in">
-        {/* Header del paciente */}
+    const Sidebar=()=><div className="space-y-3">
         <Card className="p-4">
-            <div className="flex items-start gap-3">
-                <Btn onClick={onBack} variant="ghost" className="p-2"><ChevronLeft size={18}/></Btn>
-                <div className="flex-1 min-w-0">
-                    <h2 className="font-bold text-lg truncate">{patient.nombre}</h2>
-                    <p className="text-xs text-slate-500 dark:text-slate-400">CI: {formatCI(patient.ci)}{patient.telefono&&` • ${patient.telefono}`}{calcEdad(patient.fecha_nacimiento)!==null&&` • ${calcEdad(patient.fecha_nacimiento)} años`}</p>
-                    {patient.direccion&&<p className="text-[10px] text-slate-400 truncate">📍 {patient.direccion}</p>}
+            <div className="flex items-center gap-3 mb-3">
+                <Btn onClick={onBack} variant="ghost" className="p-2 lg:hidden"><ChevronLeft size={18}/></Btn>
+                <div className="w-12 h-12 rounded-full bg-gradient-to-br from-brand-500 to-indigo-600 flex items-center justify-center text-white font-bold text-lg shrink-0">{(patient.nombre||'?').charAt(0).toUpperCase()}</div>
+                <div className="min-w-0 flex-1">
+                    <h2 className="font-bold text-base truncate">{patient.nombre}</h2>
+                    {edad!==null&&<p className="text-[10px] text-slate-400">{edad} años</p>}
                 </div>
             </div>
-            {hasAlerts&&<div className="mt-3 bg-red-500 text-white p-2 rounded-lg flex items-center gap-2 text-xs font-medium"><AlertTriangle size={14}/><span className="truncate">Alergias: {[...(medRec.alergias||[]),...(medRec.alergias_medicamentos||[])].join(', ')}</span></div>}
+            <div className="space-y-1.5 text-xs">
+                <div className="flex items-start gap-2"><span className="text-slate-400 shrink-0 w-12">CI</span><span className="font-medium truncate">{formatCI(patient.ci)}</span></div>
+                {patient.telefono&&<div className="flex items-start gap-2"><span className="text-slate-400 shrink-0 w-12">Tel</span><a href={`tel:${patient.telefono}`} className="font-medium text-brand-600 dark:text-brand-400 truncate">{patient.telefono}</a></div>}
+                {patient.fecha_nacimiento&&<div className="flex items-start gap-2"><span className="text-slate-400 shrink-0 w-12">F. Nac</span><span className="font-medium">{new Date(patient.fecha_nacimiento+'T00:00').toLocaleDateString('es-UY')}</span></div>}
+                {patient.direccion&&<div className="flex items-start gap-2"><span className="text-slate-400 shrink-0 w-12">📍</span><span className="font-medium text-[10px] break-words">{patient.direccion}</span></div>}
+            </div>
         </Card>
 
-        {/* Sub-tabs */}
-        <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl overflow-hidden">
-            <div className="flex overflow-x-auto scrollbar-hide">
-                {tabs.map(t=><button key={t.id} onClick={()=>setTab(t.id)} className={`flex items-center gap-1.5 px-4 py-3 text-xs font-bold whitespace-nowrap border-b-2 ${tab===t.id?'border-brand-600 text-brand-600 dark:text-brand-400 bg-brand-50/50 dark:bg-brand-900/20':'border-transparent text-slate-400'}`}><t.icon size={14}/>{t.label}</button>)}
+        {hasAlerts&&<Card className="p-3 bg-red-500 dark:bg-red-700 text-white border-red-600">
+            <div className="flex items-start gap-2"><AlertTriangle size={14} className="shrink-0 mt-0.5"/><div className="text-xs"><p className="font-bold mb-0.5">⚠️ Alergias</p><p className="text-[10px]">{[...(medRec.alergias||[]),...(medRec.alergias_medicamentos||[])].join(', ')}</p></div></div>
+        </Card>}
+
+        <Card className="p-3">
+            <p className="text-[10px] font-bold text-slate-400 uppercase mb-2">Saldo</p>
+            <div className="grid grid-cols-3 gap-1 text-center text-[10px]">
+                <div><p className="text-slate-400">Presup.</p><p className="font-bold text-brand-600 dark:text-brand-400">${(patient.presupuesto||0).toLocaleString('es-UY')}</p></div>
+                <div><p className="text-slate-400">Abonado</p><p className="font-bold text-emerald-600 dark:text-emerald-400">${(patient.abonado||0).toLocaleString('es-UY')}</p></div>
+                <div><p className="text-slate-400">Saldo</p><p className="font-bold text-red-600 dark:text-red-400">${saldo.toLocaleString('es-UY')}</p></div>
+            </div>
+        </Card>
+
+        {proxCita&&<Card className="p-3 border-l-4 border-l-amber-500">
+            <p className="text-[10px] font-bold text-amber-600 dark:text-amber-400 uppercase mb-1">Próxima cita</p>
+            <p className="text-xs font-bold">{proxCita.fecha} • {proxCita.hora}</p>
+            <p className="text-[10px] text-slate-500 dark:text-slate-400">Dr. {proxCita.odontologo}</p>
+        </Card>}
+    </div>;
+
+    return<div className="animate-fade-in">
+        {/* Botón volver móvil arriba */}
+        <div className="lg:hidden mb-3"><Btn onClick={onBack} variant="ghost" className="px-3 py-2 text-xs"><ChevronLeft size={16} className="inline"/> Volver a la lista</Btn></div>
+
+        <div className="lg:grid lg:grid-cols-[280px_1fr] lg:gap-4">
+            {/* Sidebar */}
+            <aside className="mb-4 lg:mb-0 lg:sticky lg:top-3 lg:self-start"><Sidebar/></aside>
+
+            {/* Contenido principal */}
+            <div className="space-y-4 min-w-0">
+                {/* Sub-tabs */}
+                <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl overflow-hidden">
+                    <div className="flex overflow-x-auto scrollbar-hide">
+                        {tabs.map(t=><button key={t.id} onClick={()=>setTab(t.id)} className={`flex items-center gap-1.5 px-4 py-3 text-xs font-bold whitespace-nowrap border-b-2 ${tab===t.id?'border-brand-600 text-brand-600 dark:text-brand-400 bg-brand-50/50 dark:bg-brand-900/20':'border-transparent text-slate-400'}`}><t.icon size={14}/>{t.label}</button>)}
+                    </div>
+                </div>
+
+                {tab==='resumen'&&<PatientResumen patient={patient} medRec={medRec} hist={hist} apps={apps} saldo={saldo} onGoTab={setTab}/>}
+                {tab==='ficha'&&<PatientFicha patient={patient} medRec={medRec} user={user} onSaved={loadAll}/>}
+                {tab==='odo'&&<PatientOdo patient={patient} medRec={medRec} user={user} hist={hist} users={users} onSaved={loadAll} onHistReload={loadAll}/>}
+                {tab==='historia'&&<PatientHistoria patient={patient} hist={hist} users={users} user={user} onReload={loadAll}/>}
+                {tab==='fotos'&&<PatientFotos patient={patient} imgs={imgs} onReload={loadAll}/>}
+                {tab==='citas'&&<PatientCitas patient={patient} apps={apps} onReload={loadAll}/>}
+                {tab==='consent'&&<PatientConsents patient={patient} user={user}/>}
             </div>
         </div>
-
-        {tab==='resumen'&&<PatientResumen patient={patient} medRec={medRec} hist={hist} apps={apps} saldo={saldo} onGoTab={setTab}/>}
-        {tab==='ficha'&&<PatientFicha patient={patient} medRec={medRec} user={user} onSaved={loadAll}/>}
-        {tab==='odo'&&<PatientOdo patient={patient} medRec={medRec} user={user} onSaved={loadAll}/>}
-        {tab==='historia'&&<PatientHistoria patient={patient} hist={hist} users={users} user={user} onReload={loadAll}/>}
-        {tab==='fotos'&&<PatientFotos patient={patient} imgs={imgs} onReload={loadAll}/>}
-        {tab==='citas'&&<PatientCitas patient={patient} apps={apps} onReload={loadAll}/>}
-        {tab==='consent'&&<PatientConsents patient={patient} user={user}/>}
     </div>
 };
 
 // --- Sub-vistas del hub ---
 const PatientResumen=({patient,medRec,hist,apps,saldo,onGoTab})=>{
-    const proxCita=apps.filter(a=>!isPast(a.fecha,a.hora)).sort((a,b)=>new Date(a.fecha+'T'+a.hora)-new Date(b.fecha+'T'+b.hora))[0];
     const ultEvo=hist.find(h=>h.tipo==='EVOLUCION');
+    const ultPago=hist.find(h=>h.tipo==='PAGO');
     return<div className="space-y-4">
-        <Card className="p-4">
-            <SectionTitle icon={DollarSign}>Finanzas</SectionTitle>
-            <div className="grid grid-cols-3 gap-2 text-center p-3 bg-slate-900 dark:bg-slate-950 rounded-lg text-white">
-                <div><span className="text-[10px] text-slate-400 block">Presup.</span><span className="font-bold text-brand-400">${(patient.presupuesto||0).toLocaleString('es-UY')}</span></div>
-                <div><span className="text-[10px] text-slate-400 block">Abonado</span><span className="font-bold text-emerald-400">${(patient.abonado||0).toLocaleString('es-UY')}</span></div>
-                <div><span className="text-[10px] text-slate-400 block">Saldo</span><span className="font-bold text-red-400">${saldo.toLocaleString('es-UY')}</span></div>
-            </div>
-        </Card>
-        {proxCita&&<Card className="p-4 border-l-4 border-l-amber-500">
-            <SectionTitle icon={Calendar} color="text-amber-600 dark:text-amber-400">Próxima cita</SectionTitle>
-            <p className="text-sm font-bold">{proxCita.fecha} • {proxCita.hora}</p>
-            <p className="text-xs text-slate-500 dark:text-slate-400">Dr. {proxCita.odontologo}</p>
-            {proxCita.tratamiento&&<p className="text-xs mt-1">{proxCita.tratamiento}</p>}
-        </Card>}
         {ultEvo&&<Card className="p-4 border-l-4 border-l-brand-500">
             <SectionTitle icon={ClipboardList}>Última evolución</SectionTitle>
             <p className="text-[10px] text-slate-400">{ultEvo.fecha} • Dr. {ultEvo.odontologo}</p>
             <p className="text-sm mt-1">{ultEvo.motivo}</p>
+        </Card>}
+        {ultPago&&<Card className="p-4 border-l-4 border-l-emerald-500">
+            <SectionTitle icon={DollarSign} color="text-emerald-600 dark:text-emerald-400">Último pago</SectionTitle>
+            <p className="text-[10px] text-slate-400">{ultPago.fecha} • Dr. {ultPago.odontologo}</p>
+            <p className="text-sm mt-1">{ultPago.motivo}</p>
         </Card>}
         {medRec&&(()=>{
             const cap=s=>s.charAt(0).toUpperCase()+s.slice(1);
@@ -663,17 +930,16 @@ const PatientFicha=({patient,medRec,user,onSaved})=>{
     </div>
 };
 
-const PatientOdo=({patient,medRec,user,onSaved})=>{
+const PatientOdo=({patient,medRec,user,hist,users,onSaved,onHistReload})=>{
     const[rec,setRec]=useState(medRec||{paciente_id:patient.id,antecedentes_familiares:{},antecedentes_personales:{},alergias:[],alergias_medicamentos:[],medicacion_actual:[],odontograma:{}});
     const save=async()=>{const r=await S.saveMed({...rec,fecha_actualizacion:new Date().toLocaleDateString()});if(r){toast.ok('Odontograma guardado');onSaved()}};
-    return<Odontogram value={rec.odontograma} onChange={o=>setRec({...rec,odontograma:o})} onSave={save}/>
+    return<Odontogram value={rec.odontograma} onChange={o=>setRec({...rec,odontograma:o})} onSave={save} patient={patient} hist={hist} users={users} user={user} onHistReload={onHistReload}/>
 };
 
 const PatientHistoria=({patient,hist,users,user,onReload})=>{
+    const[subTab,setSubTab]=useState('todo');
     const[form,setForm]=useState({tto:'',dr:user.role===Role.ODONTOLOGO?user.name:''});
     const[presForm,setPresForm]=useState({monto:'',motivo:''});const[pago,setPago]=useState('');
-    const[filter,setFilter]=useState('TODO');
-    const filtered=useMemo(()=>filter==='TODO'?hist:hist.filter(h=>h.tipo===filter),[hist,filter]);
 
     const saveEvo=async()=>{if(!form.tto||!form.dr)return toast.warn('Complete campos');const r=await S.saveHist({paciente_id:patient.id,fecha:new Date().toLocaleDateString(),odontologo:form.dr,motivo:form.tto,tipo:'EVOLUCION',deleted:false});if(r){setForm({tto:'',dr:user.role===Role.ODONTOLOGO?user.name:form.dr});toast.ok('Evolución guardada');onReload()}};
 
@@ -688,27 +954,79 @@ const PatientHistoria=({patient,hist,users,user,onReload})=>{
         const r=await S.savePatient({...patient,presupuesto:newB,abonado:newA});if(r){setPresForm({monto:'',motivo:''});setPago('');onReload();toast.ok(saldado?'¡Cuenta saldada!':'Montos actualizados')}
     };
 
-    const FILTERS=[['TODO','Todo'],['EVOLUCION','Evoluciones'],['PAGO','Pagos'],['PRESUPUESTO','Presup.'],['CITA','Citas'],['SISTEMA','Sistema']];
+    // Filtros por sub-tab
+    const filtered=useMemo(()=>{
+        if(subTab==='todo')return hist;
+        if(subTab==='trat')return hist.filter(h=>h.tipo==='EVOLUCION');
+        if(subTab==='pagos')return hist.filter(h=>h.tipo==='PAGO');
+        if(subTab==='presup')return hist.filter(h=>h.tipo==='PRESUPUESTO');
+        if(subTab==='citas')return hist.filter(h=>h.tipo==='CITA');
+        if(subTab==='sistema')return hist.filter(h=>h.tipo==='SISTEMA');
+        return hist;
+    },[hist,subTab]);
+
+    // Total cobrado y presupuestado de la lista filtrada
+    const totals=useMemo(()=>{
+        const sumPagos=hist.filter(h=>h.tipo==='PAGO').reduce((s,h)=>{const m=/\$(\d+(?:\.\d+)?)/.exec(h.motivo||'');return s+(m?parseFloat(m[1]):0)},0);
+        const sumPresup=hist.filter(h=>h.tipo==='PRESUPUESTO').reduce((s,h)=>{const m=/\$(\d+(?:\.\d+)?)/.exec(h.motivo||'');return s+(m?parseFloat(m[1]):0)},0);
+        return{sumPagos,sumPresup,countTrat:hist.filter(h=>h.tipo==='EVOLUCION').length};
+    },[hist]);
+
+    const SUB_TABS=[
+        {id:'todo',label:'Todo',count:hist.length},
+        {id:'trat',label:'Tratamientos',count:totals.countTrat},
+        {id:'pagos',label:'Pagos',count:hist.filter(h=>h.tipo==='PAGO').length},
+        {id:'presup',label:'Presupuestos',count:hist.filter(h=>h.tipo==='PRESUPUESTO').length},
+        {id:'citas',label:'Citas',count:hist.filter(h=>h.tipo==='CITA').length},
+        {id:'sistema',label:'Sistema',count:hist.filter(h=>h.tipo==='SISTEMA').length}
+    ];
 
     return<div className="space-y-4">
-        <Card className="p-4">
-            <SectionTitle icon={DollarSign}>Movimiento financiero</SectionTitle>
-            <div className="space-y-2">
-                <Input placeholder="Motivo presupuesto" value={presForm.motivo} onChange={e=>setPresForm({...presForm,motivo:e.target.value})}/>
-                <div className="grid grid-cols-2 gap-2"><Input type="number" placeholder="Presupuesto $" value={presForm.monto} onChange={e=>setPresForm({...presForm,monto:e.target.value})}/><Input type="number" placeholder="Pago $" value={pago} onChange={e=>setPago(e.target.value)}/></div>
-                <Btn onClick={saveFin} variant="secondary" className="w-full py-2 text-sm bg-slate-800 hover:bg-slate-700 text-white">Registrar</Btn>
+        {/* Sub-pestañas internas */}
+        <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl overflow-hidden">
+            <div className="flex overflow-x-auto scrollbar-hide">
+                {SUB_TABS.map(t=><button key={t.id} onClick={()=>setSubTab(t.id)} className={`flex items-center gap-1 px-3 py-2.5 text-[11px] font-bold whitespace-nowrap border-b-2 ${subTab===t.id?'border-brand-600 text-brand-600 dark:text-brand-400 bg-brand-50/50 dark:bg-brand-900/20':'border-transparent text-slate-500 dark:text-slate-400'}`}>
+                    {t.label}
+                    {t.count>0&&<span className={`text-[9px] px-1.5 rounded-full ${subTab===t.id?'bg-brand-600 text-white':'bg-slate-200 dark:bg-slate-600 text-slate-600 dark:text-slate-300'}`}>{t.count}</span>}
+                </button>)}
             </div>
-        </Card>
-        <Card className="p-4">
-            <SectionTitle icon={PlusCircle}>Nueva Evolución</SectionTitle>
+        </div>
+
+        {/* Form de nueva evolución (solo en Tratamientos o Todo) */}
+        {(subTab==='todo'||subTab==='trat')&&<Card className="p-4">
+            <SectionTitle icon={PlusCircle}>Nueva evolución / tratamiento</SectionTitle>
             <Select value={form.dr} onChange={e=>setForm({...form,dr:e.target.value})} className="mb-2"><option value="">Odontólogo...</option>{users.map(u=><option key={u.id} value={u.name}>{u.name}</option>)}</Select>
-            <Textarea value={form.tto} onChange={e=>setForm({...form,tto:e.target.value})} placeholder="Tratamiento..." className="h-20 resize-none mb-2"/>
+            <Textarea value={form.tto} onChange={e=>setForm({...form,tto:e.target.value})} placeholder="Tratamiento realizado..." className="h-20 resize-none mb-2"/>
             <Btn onClick={saveEvo} className="w-full py-2 text-sm">Guardar Evolución</Btn>
-        </Card>
+        </Card>}
+
+        {/* Form de pagos/presupuestos (solo en Pagos, Presupuestos o Todo) */}
+        {(subTab==='todo'||subTab==='pagos'||subTab==='presup')&&<Card className="p-4">
+            <SectionTitle icon={DollarSign}>Registrar pago o presupuesto</SectionTitle>
+            <div className="grid grid-cols-2 gap-3 text-center p-3 bg-slate-100 dark:bg-slate-900/50 rounded-lg mb-3 text-xs">
+                <div><p className="text-slate-400">Total cobrado histórico</p><p className="font-bold text-emerald-600 dark:text-emerald-400">${totals.sumPagos.toLocaleString('es-UY')}</p></div>
+                <div><p className="text-slate-400">Total presupuestado</p><p className="font-bold text-brand-600 dark:text-brand-400">${totals.sumPresup.toLocaleString('es-UY')}</p></div>
+            </div>
+            <div className="space-y-2">
+                <Input placeholder="Motivo del presupuesto (si aplica)" value={presForm.motivo} onChange={e=>setPresForm({...presForm,motivo:e.target.value})}/>
+                <div className="grid grid-cols-2 gap-2">
+                    <div><label className="text-[10px] font-bold text-brand-600 dark:text-brand-400 mb-1 block">Nuevo presupuesto $</label><Input type="number" placeholder="0" value={presForm.monto} onChange={e=>setPresForm({...presForm,monto:e.target.value})}/></div>
+                    <div><label className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 mb-1 block">Pago recibido $</label><Input type="number" placeholder="0" value={pago} onChange={e=>setPago(e.target.value)}/></div>
+                </div>
+                <Btn onClick={saveFin} className="w-full py-2 text-sm">Registrar movimiento</Btn>
+            </div>
+        </Card>}
+
+        {/* Lista de movimientos */}
         <Card className="overflow-hidden">
-            <div className="p-2 border-b border-slate-200 dark:border-slate-700 flex gap-1 overflow-x-auto scrollbar-hide">{FILTERS.map(([k,l])=><button key={k} onClick={()=>setFilter(k)} className={`px-2.5 py-1 rounded-full text-[10px] font-bold whitespace-nowrap ${filter===k?'bg-brand-600 text-white':'bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-400'}`}>{l}</button>)}</div>
-            <div className="divide-y divide-slate-200 dark:divide-slate-700 max-h-[50vh] overflow-auto">
-                {filtered.map(h=><div key={h.id} className={`p-3 border-l-4 ${h.tipo==='PAGO'?'border-emerald-500 bg-emerald-50 dark:bg-emerald-900/20':h.tipo==='PRESUPUESTO'?'border-indigo-500 bg-indigo-50 dark:bg-indigo-900/20':h.tipo==='CITA'?'border-amber-500 bg-amber-50 dark:bg-amber-900/20':h.tipo==='SISTEMA'?'border-slate-800 bg-slate-100 dark:bg-slate-900':'border-brand-500'}`}><div className="flex justify-between text-[10px] font-bold text-slate-500 dark:text-slate-400 mb-1"><span>{h.fecha}</span><span>{h.tipo==='EVOLUCION'?'Dr. '+h.odontologo:h.tipo}</span></div><p className="text-sm">{h.motivo}</p></div>)}
+            <div className="p-3 border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/50 flex justify-between items-center">
+                <h3 className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">{SUB_TABS.find(t=>t.id===subTab)?.label} ({filtered.length})</h3>
+            </div>
+            <div className="divide-y divide-slate-200 dark:divide-slate-700 max-h-[60vh] overflow-auto">
+                {filtered.map(h=><div key={h.id} className={`p-3 border-l-4 ${h.tipo==='PAGO'?'border-emerald-500 bg-emerald-50 dark:bg-emerald-900/20':h.tipo==='PRESUPUESTO'?'border-indigo-500 bg-indigo-50 dark:bg-indigo-900/20':h.tipo==='CITA'?'border-amber-500 bg-amber-50 dark:bg-amber-900/20':h.tipo==='SISTEMA'?'border-slate-800 bg-slate-100 dark:bg-slate-900':'border-brand-500'}`}>
+                    <div className="flex justify-between text-[10px] font-bold text-slate-500 dark:text-slate-400 mb-1"><span>{h.fecha}</span><span>{h.tipo==='EVOLUCION'?'Dr. '+h.odontologo:h.tipo}</span></div>
+                    <p className="text-sm">{h.motivo}</p>
+                </div>)}
                 {filtered.length===0&&<div className="p-8 text-center text-slate-300 dark:text-slate-600 text-xs">Sin registros</div>}
             </div>
         </Card>
@@ -1240,7 +1558,7 @@ const Admin=({user,online,onUserUpdated})=>{
             <Card className="p-6 text-center"><Upload size={32} className="mx-auto text-emerald-600 dark:text-emerald-400 mb-2"/><h4 className="font-bold mb-2">Importar</h4><input type="file" ref={fileRef} accept=".json" className="hidden" onChange={async e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=async ev=>{if(await S.import(ev.target.result)){toast.ok('Importado, recargando...');setTimeout(()=>window.location.reload(),1500)}};r.readAsText(f)}}/><Btn variant="success" onClick={()=>fileRef.current.click()} className="w-full py-3 text-sm">Cargar</Btn></Card>
         </div>}
 
-        {tab==='info'&&<div className="bg-gradient-to-br from-slate-800 to-indigo-900 p-6 rounded-xl text-white text-center"><Cloud size={40} className="mx-auto mb-2"/><h4 className="text-lg font-bold mb-2">Sistema en la Nube</h4><p className="text-white/80 text-sm mb-3">Supabase Auth + Database</p><div className={`inline-flex items-center gap-2 px-4 py-2 rounded-full ${online?'bg-emerald-500':'bg-red-500'}`}>{online?<><Wifi size={16}/>Conectado</>:<><WifiOff size={16}/>Offline</>}</div><p className="text-white/60 text-[10px] mt-3">v3.2 • Auditoría de consentimientos</p></div>}
+        {tab==='info'&&<div className="bg-gradient-to-br from-slate-800 to-indigo-900 p-6 rounded-xl text-white text-center"><Cloud size={40} className="mx-auto mb-2"/><h4 className="text-lg font-bold mb-2">Sistema en la Nube</h4><p className="text-white/80 text-sm mb-3">Supabase Auth + Database</p><div className={`inline-flex items-center gap-2 px-4 py-2 rounded-full ${online?'bg-emerald-500':'bg-red-500'}`}>{online?<><Wifi size={16}/>Conectado</>:<><WifiOff size={16}/>Offline</>}</div><p className="text-white/60 text-[10px] mt-3">v3.4 • Odontograma con paleta + pediatría + notas</p></div>}
     </div>
 };
 
@@ -1314,7 +1632,7 @@ const App=()=>{
             {tab==='admin'&&<Admin user={user} online={online} onUserUpdated={u=>setUser({...user,...u})}/>}
         </main>
 
-        <footer className="p-2 text-center text-[10px] text-slate-400 no-print safe-bottom">Arte Dental © 2025 • v3.2 • {online?'🟢':'🔴'}</footer>
+        <footer className="p-2 text-center text-[10px] text-slate-400 no-print safe-bottom">Arte Dental © 2025 • v3.4 • {online?'🟢':'🔴'}</footer>
     </div>
 };
 
