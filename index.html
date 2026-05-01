@@ -1353,15 +1353,42 @@ const BUDGET_STATES={
     terminado:{label:'Terminado',color:'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300',icon:'✅'}
 };
 
-const BudgetDetail=({budget,patient,user,onClose,onChanged})=>{
+// Modal pequeño para confirmar pago
+const PayModal=({item,onConfirm,onClose})=>{
+    const porPagar=(parseFloat(item.cantidad)||0)*(parseFloat(item.precio_unit)||0)-(parseFloat(item.pagado)||0);
+    const[amt,setAmt]=useState(porPagar.toString());
+    const aplicar=async()=>{
+        const v=parseFloat(amt)||0;
+        if(v<=0)return toast.warn('Monto inválido');
+        if(v>porPagar)return toast.warn('Excede el saldo de este item');
+        await onConfirm(v);
+    };
+    return<Portal><div className="fixed inset-0 bg-black/60 z-[200] flex items-center justify-center p-4" onClick={onClose}>
+        <div className="bg-white dark:bg-slate-800 rounded-xl p-4 max-w-xs w-full" onClick={e=>e.stopPropagation()}>
+            <h4 className="font-bold text-sm mb-2">Pagar item</h4>
+            <p className="text-xs text-slate-500 mb-1">{item.descripcion}</p>
+            <p className="text-[10px] text-slate-400 mb-3">Por pagar: ${porPagar.toLocaleString('es-UY')}</p>
+            <Input type="number" value={amt} onChange={e=>setAmt(e.target.value)} placeholder="Monto" className="mb-3" autoFocus/>
+            <div className="flex gap-2">
+                <Btn onClick={aplicar} variant="success" className="flex-1 py-2 text-sm">Confirmar</Btn>
+                <Btn variant="secondary" onClick={onClose} className="flex-1 py-2 text-sm">Cancelar</Btn>
+            </div>
+        </div>
+    </div></Portal>;
+};
+
+// Tarjeta de presupuesto inline (sin modal)
+const BudgetCard=({budget,patient,user,onChanged,onDelete})=>{
     const[items,setItems]=useState([]);
     const[loading,setLoading]=useState(true);
-    const[saving,setSaving]=useState(false);
     const[notaInterna,setNotaInterna]=useState(budget.nota_interna||'');
     const[titulo,setTitulo]=useState(budget.titulo||'Presupuesto');
     const[estado,setEstado]=useState(budget.estado);
     const[newItem,setNewItem]=useState({descripcion:'',cantidad:1,precio_unit:''});
     const[payTarget,setPayTarget]=useState(null);
+    const[expanded,setExpanded]=useState(true);
+    const[savingMeta,setSavingMeta]=useState(false);
+    const metaTimer=useRef(null);
 
     const load=async()=>{setLoading(true);setItems(await S.getBudgetItems(budget.id));setLoading(false)};
     useEffect(()=>{load()},[budget.id]);
@@ -1372,28 +1399,36 @@ const BudgetDetail=({budget,patient,user,onClose,onChanged})=>{
         return{total,pagado,porPagar:total-pagado};
     },[items]);
 
-    // Auto-actualizar estado a "terminado" si todo está saldado
+    // Auto-terminado al saldar
     useEffect(()=>{
         if(items.length>0&&totals.porPagar<=0&&estado!=='terminado'&&estado!=='rechazado'&&estado!=='abandonado'){
             setEstado('terminado');
             S.updateBudget(budget.id,{estado:'terminado'});
             S.saveHist({paciente_id:patient.id,fecha:new Date().toLocaleDateString(),odontologo:user.name,motivo:`PRESUPUESTO ${budget.numero||''} ${titulo} SALDADO`,tipo:'SISTEMA',deleted:false});
+            if(onChanged)onChanged();
         }
     },[totals.porPagar]);
 
-    const saveMeta=async()=>{
-        setSaving(true);
-        const r=await S.updateBudget(budget.id,{titulo,estado,nota_interna:notaInterna});
-        setSaving(false);
-        if(r){toast.ok('Guardado');if(onChanged)onChanged()}
+    // Autosave debounceado para titulo/estado/nota
+    const triggerAutoSave=(patch)=>{
+        clearTimeout(metaTimer.current);
+        metaTimer.current=setTimeout(async()=>{
+            setSavingMeta(true);
+            await S.updateBudget(budget.id,patch);
+            setSavingMeta(false);
+            if(onChanged)onChanged();
+        },800);
     };
+
+    const onTituloChange=v=>{setTitulo(v);triggerAutoSave({titulo:v})};
+    const onEstadoChange=v=>{setEstado(v);S.updateBudget(budget.id,{estado:v}).then(()=>onChanged&&onChanged())};
+    const onNotaChange=v=>{setNotaInterna(v);triggerAutoSave({nota_interna:v})};
 
     const addItem=async()=>{
         if(!newItem.descripcion||!newItem.precio_unit)return toast.warn('Descripción y precio obligatorios');
         const r=await S.addBudgetItem({budget_id:budget.id,descripcion:newItem.descripcion,cantidad:parseFloat(newItem.cantidad)||1,precio_unit:parseFloat(newItem.precio_unit)||0,pagado:0,orden:items.length});
         if(r){
             setNewItem({descripcion:'',cantidad:1,precio_unit:''});
-            // Registrar en historial el nuevo item presupuestado
             const subtotal=(parseFloat(r.cantidad)||1)*(parseFloat(r.precio_unit)||0);
             await S.saveHist({paciente_id:patient.id,fecha:new Date().toLocaleDateString(),odontologo:user.name,motivo:`PRESUPUESTO ${budget.numero||''}: ${r.descripcion} x${r.cantidad} = $${subtotal}`,tipo:'PRESUPUESTO',deleted:false});
             load();
@@ -1401,191 +1436,145 @@ const BudgetDetail=({budget,patient,user,onClose,onChanged})=>{
         }
     };
 
-    const updateItem=async(id,patch)=>{
-        const r=await S.updateBudgetItem(id,patch);
-        if(r)load();
-    };
+    const updateItem=async(id,patch)=>{const r=await S.updateBudgetItem(id,patch);if(r)load()};
     const delItem=async(id)=>{if(!confirm('¿Eliminar item?'))return;await S.delBudgetItem(id);load();if(onChanged)onChanged()};
 
-    const PaymentForm=({item})=>{
-        const porPagar=(parseFloat(item.cantidad)||0)*(parseFloat(item.precio_unit)||0)-(parseFloat(item.pagado)||0);
-        const[amt,setAmt]=useState(porPagar.toString());
-        const aplicar=async()=>{
-            const v=parseFloat(amt)||0;
-            if(v<=0)return toast.warn('Monto inválido');
-            if(v>porPagar)return toast.warn('Excede el saldo de este item');
-            const newPagado=(parseFloat(item.pagado)||0)+v;
-            await updateItem(item.id,{pagado:newPagado});
-            await S.saveHist({paciente_id:patient.id,fecha:new Date().toLocaleDateString(),odontologo:user.name,motivo:`PAGO ${budget.numero||''} - ${item.descripcion}: $${v}`,tipo:'PAGO',deleted:false});
-            setPayTarget(null);
-            if(onChanged)onChanged();
-            toast.ok('Pago registrado');
-        };
-        return<Portal><div className="fixed inset-0 bg-black/60 z-[200] flex items-center justify-center p-4" onClick={()=>setPayTarget(null)}>
-            <div className="bg-white dark:bg-slate-800 rounded-xl p-4 max-w-xs w-full" onClick={e=>e.stopPropagation()}>
-                <h4 className="font-bold text-sm mb-2">Pagar item</h4>
-                <p className="text-xs text-slate-500 mb-1">{item.descripcion}</p>
-                <p className="text-[10px] text-slate-400 mb-3">Por pagar: ${porPagar.toLocaleString('es-UY')}</p>
-                <Input type="number" value={amt} onChange={e=>setAmt(e.target.value)} placeholder="Monto" className="mb-3" autoFocus/>
-                <div className="flex gap-2">
-                    <Btn onClick={aplicar} variant="success" className="flex-1 py-2 text-sm">Confirmar</Btn>
-                    <Btn variant="secondary" onClick={()=>setPayTarget(null)} className="flex-1 py-2 text-sm">Cancelar</Btn>
-                </div>
-            </div>
-        </div></Portal>;
+    const confirmPay=async(item,amt)=>{
+        const newPagado=(parseFloat(item.pagado)||0)+amt;
+        await updateItem(item.id,{pagado:newPagado});
+        await S.saveHist({paciente_id:patient.id,fecha:new Date().toLocaleDateString(),odontologo:user.name,motivo:`PAGO ${budget.numero||''} - ${item.descripcion}: $${amt}`,tipo:'PAGO',deleted:false});
+        setPayTarget(null);
+        if(onChanged)onChanged();
+        toast.ok('Pago registrado');
     };
 
-    return<Portal><div className="fixed inset-0 bg-black/60 z-[150] flex items-center justify-center p-2 sm:p-4" onClick={onClose}>
-        <div className="bg-white dark:bg-slate-800 w-full sm:max-w-3xl rounded-2xl flex flex-col animate-fade-in" style={{maxHeight:'calc(100vh - 1rem)'}} onClick={e=>e.stopPropagation()}>
-            {/* Header */}
-            <div className="flex justify-between items-start p-4 border-b border-slate-200 dark:border-slate-700 shrink-0 gap-2">
-                <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2 mb-1 flex-wrap">
-                        <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${BUDGET_STATES[estado]?.color}`}>{BUDGET_STATES[estado]?.icon} {BUDGET_STATES[estado]?.label}</span>
-                        <span className="text-[10px] font-mono text-slate-400">{budget.numero}</span>
-                    </div>
-                    <Input value={titulo} onChange={e=>setTitulo(e.target.value)} className="font-bold text-base py-1 px-2"/>
-                </div>
-                <button onClick={onClose} className="shrink-0 p-1"><X size={20} className="text-slate-400"/></button>
-            </div>
+    const st=BUDGET_STATES[estado]||BUDGET_STATES.creado;
 
-            <div className="flex-1 overflow-y-auto p-4 space-y-4 min-h-0">
-                {/* Estado */}
-                <Card className="p-3">
-                    <p className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase mb-2">Estado del presupuesto</p>
-                    <div className="grid grid-cols-2 sm:grid-cols-5 gap-1">
-                        {Object.entries(BUDGET_STATES).map(([k,v])=><button key={k} onClick={()=>setEstado(k)} className={`p-2 rounded-lg text-[10px] font-bold border-2 ${estado===k?v.color+' border-current':'bg-white dark:bg-slate-700 border-slate-200 dark:border-slate-600 text-slate-500'}`}>{v.icon} {v.label}</button>)}
-                    </div>
-                </Card>
-
-                {/* Items - estilo Doctocliq */}
-                <Card className="overflow-hidden">
-                    {loading?<div className="p-4 text-center"><RefreshCw className="animate-spin inline" size={16}/></div>
-                    :<>
-                        {/* Header de columnas (sólo desktop) */}
-                        <div className="hidden sm:grid grid-cols-[24px_1fr_60px_100px_90px_90px_120px_70px] gap-2 items-center px-3 py-2.5 bg-slate-700 dark:bg-slate-900 text-white text-[10px] font-bold uppercase tracking-wide">
-                            <div></div>
-                            <div></div>
-                            <div className="text-center">Cant.</div>
-                            <div className="text-right">Precio Unit.</div>
-                            <div className="text-right">Pagado</div>
-                            <div className="text-right">Por pagar</div>
-                            <div className="pl-2">Comentario</div>
-                            <div></div>
-                        </div>
-
-                        <div className="divide-y divide-slate-200 dark:divide-slate-700">
-                            {items.map(i=>{
-                                const subtotal=(parseFloat(i.cantidad)||0)*(parseFloat(i.precio_unit)||0);
-                                const pagado=parseFloat(i.pagado)||0;
-                                const porPagar=subtotal-pagado;
-                                const saldado=porPagar<=0&&subtotal>0;
-                                const parcial=pagado>0&&!saldado;
-                                // Círculo de progreso: vacío / mitad / lleno
-                                const Icon=()=>{
-                                    if(saldado)return<svg viewBox="0 0 16 16" width="16" height="16"><circle cx="8" cy="8" r="6" fill="#10b981"/></svg>;
-                                    if(parcial)return<svg viewBox="0 0 16 16" width="16" height="16"><circle cx="8" cy="8" r="6" fill="none" stroke="#3b82f6" strokeWidth="1.5"/><path d="M 8 2 A 6 6 0 0 1 8 14 Z" fill="#3b82f6"/></svg>;
-                                    return<svg viewBox="0 0 16 16" width="16" height="16"><circle cx="8" cy="8" r="6" fill="none" stroke="#94a3b8" strokeWidth="1.5"/></svg>;
-                                };
-                                return<div key={i.id} className="px-3 py-2.5 hover:bg-slate-50 dark:hover:bg-slate-700/30">
-                                    {/* Desktop: grid de columnas */}
-                                    <div className="hidden sm:grid grid-cols-[24px_1fr_60px_100px_90px_90px_120px_70px] gap-2 items-center text-xs">
-                                        <div className="flex justify-center"><Icon/></div>
-                                        <div className="font-medium truncate" title={i.descripcion}>{i.descripcion}</div>
-                                        <div className="text-center text-slate-600 dark:text-slate-300">{i.cantidad}</div>
-                                        <div className="text-right text-slate-600 dark:text-slate-300">{(parseFloat(i.precio_unit)||0).toLocaleString('es-UY')}</div>
-                                        <div className="text-right text-slate-600 dark:text-slate-300">{pagado.toLocaleString('es-UY')}</div>
-                                        <div className={`text-right font-bold ${saldado?'text-emerald-600 dark:text-emerald-400':porPagar>0?'text-red-600 dark:text-red-400':'text-slate-500'}`}>{porPagar.toLocaleString('es-UY')}</div>
-                                        <div>
-                                            <input
-                                                type="text"
-                                                value={i.nota||''}
-                                                onChange={e=>setItems(arr=>arr.map(x=>x.id===i.id?{...x,nota:e.target.value}:x))}
-                                                onBlur={e=>updateItem(i.id,{nota:e.target.value})}
-                                                placeholder="+ Agregar nota"
-                                                className="w-full bg-transparent border-0 text-[11px] py-1 px-2 placeholder-slate-300 dark:placeholder-slate-600 focus:bg-white dark:focus:bg-slate-700 focus:ring-1 focus:ring-brand-500 rounded"
-                                                style={{fontSize:'11px'}}
-                                            />
-                                        </div>
-                                        <div className="flex gap-1 justify-end">
-                                            {saldado?<span className="bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-400 px-3 py-1 rounded-full text-[10px] font-bold">✓</span>
-                                            :<button onClick={()=>setPayTarget(i)} className="border border-slate-300 dark:border-slate-600 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 px-3 py-1 rounded-full text-[10px] font-bold">Pagar</button>}
-                                            <button onClick={()=>delItem(i.id)} className="text-slate-400 hover:text-red-500 p-1"><Trash2 size={12}/></button>
-                                        </div>
-                                    </div>
-
-                                    {/* Mobile: vertical compacto */}
-                                    <div className="sm:hidden">
-                                        <div className="flex items-center gap-2 mb-2">
-                                            <Icon/>
-                                            <p className="font-bold text-xs flex-1 truncate">{i.descripcion}</p>
-                                            {saldado?<span className="bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-400 px-2 py-0.5 rounded-full text-[9px] font-bold">✓ Saldado</span>
-                                            :<button onClick={()=>setPayTarget(i)} className="border border-slate-300 dark:border-slate-600 px-2 py-0.5 rounded-full text-[9px] font-bold">Pagar</button>}
-                                        </div>
-                                        <div className="grid grid-cols-4 gap-1 text-[10px] mb-2">
-                                            <div className="text-center"><p className="text-slate-400 text-[9px]">Cant.</p><p>{i.cantidad}</p></div>
-                                            <div className="text-center"><p className="text-slate-400 text-[9px]">Precio</p><p>${(parseFloat(i.precio_unit)||0).toLocaleString('es-UY')}</p></div>
-                                            <div className="text-center"><p className="text-slate-400 text-[9px]">Pagado</p><p>${pagado.toLocaleString('es-UY')}</p></div>
-                                            <div className="text-center"><p className="text-slate-400 text-[9px]">Saldo</p><p className={`font-bold ${saldado?'text-emerald-600 dark:text-emerald-400':'text-red-600 dark:text-red-400'}`}>${porPagar.toLocaleString('es-UY')}</p></div>
-                                        </div>
-                                        <div className="flex gap-2 items-center">
-                                            <input
-                                                type="text"
-                                                value={i.nota||''}
-                                                onChange={e=>setItems(arr=>arr.map(x=>x.id===i.id?{...x,nota:e.target.value}:x))}
-                                                onBlur={e=>updateItem(i.id,{nota:e.target.value})}
-                                                placeholder="+ Agregar nota"
-                                                className="flex-1 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded text-[10px] py-1 px-2"
-                                            />
-                                            <button onClick={()=>delItem(i.id)} className="text-slate-400 hover:text-red-500 p-1"><Trash2 size={11}/></button>
-                                        </div>
-                                    </div>
-                                </div>
-                            })}
-                            {items.length===0&&<div className="p-6 text-center text-slate-300 dark:text-slate-600 text-xs">Sin items. Agregá el primero abajo.</div>}
-                        </div>
-                    </>}
-
-                    {/* Form de nuevo item */}
-                    <div className="p-3 border-t border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/30 grid grid-cols-12 gap-2">
-                        <Input className="col-span-12 sm:col-span-6 text-xs py-1.5" placeholder="Descripción del tratamiento" value={newItem.descripcion} onChange={e=>setNewItem({...newItem,descripcion:e.target.value})}/>
-                        <Input type="number" className="col-span-4 sm:col-span-2 text-xs py-1.5" placeholder="Cant" value={newItem.cantidad} onChange={e=>setNewItem({...newItem,cantidad:e.target.value})}/>
-                        <Input type="number" className="col-span-8 sm:col-span-3 text-xs py-1.5" placeholder="Precio unit." value={newItem.precio_unit} onChange={e=>setNewItem({...newItem,precio_unit:e.target.value})}/>
-                        <Btn onClick={addItem} className="col-span-12 sm:col-span-1 text-xs py-1.5">+</Btn>
-                    </div>
-                </Card>
-
-                {/* Nota interna + totales (estilo Doctocliq) */}
-                <Card className="p-4">
-                    <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-4 items-start">
-                        <div>
-                            <p className="text-[10px] text-slate-500 dark:text-slate-400 mb-1 italic">Nota interna:</p>
-                            <Textarea value={notaInterna} onChange={e=>setNotaInterna(e.target.value)} placeholder="Ej: Debe pagar siempre en efectivo." className="h-14 resize-none text-xs"/>
-                            <p className="text-[10px] text-slate-400 mt-2 italic">Creado el {new Date(budget.created_at).toLocaleDateString('es-UY',{day:'numeric',month:'short',year:'numeric'})}</p>
-                        </div>
-                        <div className="text-right space-y-1 text-xs sm:min-w-[180px]">
-                            <div className="flex justify-between gap-4"><span className="text-slate-500 dark:text-slate-400">Total</span><span className="font-bold">$ {totals.total.toLocaleString('es-UY',{minimumFractionDigits:2,maximumFractionDigits:2})}</span></div>
-                            <div className="flex justify-between gap-4"><span className="text-slate-500 dark:text-slate-400">Pagado</span><span className="font-bold text-emerald-600 dark:text-emerald-400">$ {totals.pagado.toLocaleString('es-UY',{minimumFractionDigits:2,maximumFractionDigits:2})}</span></div>
-                            <div className="flex justify-between gap-4 pt-1 border-t border-slate-200 dark:border-slate-700"><span className="text-slate-500 dark:text-slate-400 font-bold">Por pagar</span><span className={`font-bold ${totals.porPagar>0?'text-red-600 dark:text-red-400':'text-emerald-600 dark:text-emerald-400'}`}>$ {totals.porPagar.toLocaleString('es-UY',{minimumFractionDigits:2,maximumFractionDigits:2})}</span></div>
-                        </div>
-                    </div>
-                </Card>
-            </div>
-
-            <div className="p-3 border-t border-slate-200 dark:border-slate-700 shrink-0 safe-bottom flex gap-2">
-                <Btn onClick={saveMeta} disabled={saving} className="flex-1 py-2.5 text-sm">{saving?'Guardando...':'Guardar cambios'}</Btn>
-                <Btn variant="secondary" onClick={onClose} className="flex-1 py-2.5 text-sm">Cerrar</Btn>
+    return<Card className="overflow-hidden">
+        {/* Header del presupuesto */}
+        <div className="p-3 border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/50">
+            <div className="flex items-start gap-2 mb-2 flex-wrap">
+                <button onClick={()=>setExpanded(!expanded)} className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"><ChevronLeft size={16} className={expanded?'rotate-90 transition-transform':'-rotate-90 transition-transform'}/></button>
+                <span className="text-[10px] font-mono text-slate-400 mt-1.5">{budget.numero}</span>
+                <select value={estado} onChange={e=>onEstadoChange(e.target.value)} className={`text-[10px] px-2 py-1 rounded-full font-bold border-0 cursor-pointer ${st.color}`}>
+                    {Object.entries(BUDGET_STATES).map(([k,v])=><option key={k} value={k}>{v.icon} {v.label}</option>)}
+                </select>
+                <input value={titulo} onChange={e=>onTituloChange(e.target.value)} className="flex-1 min-w-0 font-bold text-sm bg-transparent border-0 focus:bg-white dark:focus:bg-slate-700 focus:ring-1 focus:ring-brand-500 rounded px-2 py-1"/>
+                {savingMeta&&<span className="text-[9px] text-slate-400 mt-2">guardando...</span>}
+                <button onClick={onDelete} className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30 rounded" title="Eliminar presupuesto"><Trash2 size={14}/></button>
             </div>
         </div>
-        {payTarget&&<PaymentForm item={payTarget}/>}
-    </div></Portal>
+
+        {expanded&&<>
+            {/* Tabla de items estilo Doctocliq */}
+            {loading?<div className="p-4 text-center"><RefreshCw className="animate-spin inline" size={16}/></div>
+            :<>
+                <div className="hidden sm:grid grid-cols-[24px_1fr_60px_100px_90px_90px_120px_70px] gap-2 items-center px-3 py-2.5 bg-slate-700 dark:bg-slate-900 text-white text-[10px] font-bold uppercase tracking-wide">
+                    <div></div>
+                    <div></div>
+                    <div className="text-center">Cant.</div>
+                    <div className="text-right">Precio Unit.</div>
+                    <div className="text-right">Pagado</div>
+                    <div className="text-right">Por pagar</div>
+                    <div className="pl-2">Comentario</div>
+                    <div></div>
+                </div>
+
+                <div className="divide-y divide-slate-200 dark:divide-slate-700">
+                    {items.map(i=>{
+                        const subtotal=(parseFloat(i.cantidad)||0)*(parseFloat(i.precio_unit)||0);
+                        const pagado=parseFloat(i.pagado)||0;
+                        const porPagar=subtotal-pagado;
+                        const saldado=porPagar<=0&&subtotal>0;
+                        const parcial=pagado>0&&!saldado;
+                        const Icon=()=>{
+                            if(saldado)return<svg viewBox="0 0 16 16" width="16" height="16"><circle cx="8" cy="8" r="6" fill="#10b981"/></svg>;
+                            if(parcial)return<svg viewBox="0 0 16 16" width="16" height="16"><circle cx="8" cy="8" r="6" fill="none" stroke="#3b82f6" strokeWidth="1.5"/><path d="M 8 2 A 6 6 0 0 1 8 14 Z" fill="#3b82f6"/></svg>;
+                            return<svg viewBox="0 0 16 16" width="16" height="16"><circle cx="8" cy="8" r="6" fill="none" stroke="#94a3b8" strokeWidth="1.5"/></svg>;
+                        };
+                        return<div key={i.id} className="px-3 py-2.5 hover:bg-slate-50 dark:hover:bg-slate-700/30">
+                            <div className="hidden sm:grid grid-cols-[24px_1fr_60px_100px_90px_90px_120px_70px] gap-2 items-center text-xs">
+                                <div className="flex justify-center"><Icon/></div>
+                                <div className="font-medium truncate" title={i.descripcion}>{i.descripcion}</div>
+                                <div className="text-center text-slate-600 dark:text-slate-300">{i.cantidad}</div>
+                                <div className="text-right text-slate-600 dark:text-slate-300">{(parseFloat(i.precio_unit)||0).toLocaleString('es-UY')}</div>
+                                <div className="text-right text-slate-600 dark:text-slate-300">{pagado.toLocaleString('es-UY')}</div>
+                                <div className={`text-right font-bold ${saldado?'text-emerald-600 dark:text-emerald-400':porPagar>0?'text-red-600 dark:text-red-400':'text-slate-500'}`}>{porPagar.toLocaleString('es-UY')}</div>
+                                <div>
+                                    <input type="text" value={i.nota||''} onChange={e=>setItems(arr=>arr.map(x=>x.id===i.id?{...x,nota:e.target.value}:x))} onBlur={e=>updateItem(i.id,{nota:e.target.value})} placeholder="+ Agregar nota" className="w-full bg-transparent border-0 text-[11px] py-1 px-2 placeholder-slate-300 dark:placeholder-slate-600 focus:bg-white dark:focus:bg-slate-700 focus:ring-1 focus:ring-brand-500 rounded"/>
+                                </div>
+                                <div className="flex gap-1 justify-end">
+                                    {saldado?<span className="bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-400 px-3 py-1 rounded-full text-[10px] font-bold">✓</span>
+                                    :<button onClick={()=>setPayTarget(i)} className="border border-slate-300 dark:border-slate-600 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 px-3 py-1 rounded-full text-[10px] font-bold">Pagar</button>}
+                                    <button onClick={()=>delItem(i.id)} className="text-slate-400 hover:text-red-500 p-1"><Trash2 size={12}/></button>
+                                </div>
+                            </div>
+
+                            {/* Mobile vertical */}
+                            <div className="sm:hidden">
+                                <div className="flex items-center gap-2 mb-2">
+                                    <Icon/>
+                                    <p className="font-bold text-xs flex-1 truncate">{i.descripcion}</p>
+                                    {saldado?<span className="bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-400 px-2 py-0.5 rounded-full text-[9px] font-bold">✓ Saldado</span>
+                                    :<button onClick={()=>setPayTarget(i)} className="border border-slate-300 dark:border-slate-600 px-2 py-0.5 rounded-full text-[9px] font-bold">Pagar</button>}
+                                </div>
+                                <div className="grid grid-cols-4 gap-1 text-[10px] mb-2">
+                                    <div className="text-center"><p className="text-slate-400 text-[9px]">Cant.</p><p>{i.cantidad}</p></div>
+                                    <div className="text-center"><p className="text-slate-400 text-[9px]">Precio</p><p>${(parseFloat(i.precio_unit)||0).toLocaleString('es-UY')}</p></div>
+                                    <div className="text-center"><p className="text-slate-400 text-[9px]">Pagado</p><p>${pagado.toLocaleString('es-UY')}</p></div>
+                                    <div className="text-center"><p className="text-slate-400 text-[9px]">Saldo</p><p className={`font-bold ${saldado?'text-emerald-600 dark:text-emerald-400':'text-red-600 dark:text-red-400'}`}>${porPagar.toLocaleString('es-UY')}</p></div>
+                                </div>
+                                <div className="flex gap-2 items-center">
+                                    <input type="text" value={i.nota||''} onChange={e=>setItems(arr=>arr.map(x=>x.id===i.id?{...x,nota:e.target.value}:x))} onBlur={e=>updateItem(i.id,{nota:e.target.value})} placeholder="+ Agregar nota" className="flex-1 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded text-[10px] py-1 px-2"/>
+                                    <button onClick={()=>delItem(i.id)} className="text-slate-400 hover:text-red-500 p-1"><Trash2 size={11}/></button>
+                                </div>
+                            </div>
+                        </div>
+                    })}
+                    {items.length===0&&<div className="p-6 text-center text-slate-300 dark:text-slate-600 text-xs">Sin items. Agregá el primero abajo.</div>}
+                </div>
+            </>}
+
+            {/* Form de nuevo item */}
+            <div className="p-3 border-t border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/30 grid grid-cols-12 gap-2">
+                <Input className="col-span-12 sm:col-span-6 text-xs py-1.5" placeholder="Descripción del tratamiento" value={newItem.descripcion} onChange={e=>setNewItem({...newItem,descripcion:e.target.value})}/>
+                <Input type="number" className="col-span-4 sm:col-span-2 text-xs py-1.5" placeholder="Cant" value={newItem.cantidad} onChange={e=>setNewItem({...newItem,cantidad:e.target.value})}/>
+                <Input type="number" className="col-span-8 sm:col-span-3 text-xs py-1.5" placeholder="Precio unit." value={newItem.precio_unit} onChange={e=>setNewItem({...newItem,precio_unit:e.target.value})}/>
+                <Btn onClick={addItem} className="col-span-12 sm:col-span-1 text-xs py-1.5">+</Btn>
+            </div>
+
+            {/* Nota interna + totales */}
+            <div className="p-4 border-t border-slate-200 dark:border-slate-700">
+                <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-4 items-start">
+                    <div>
+                        <p className="text-[10px] text-slate-500 dark:text-slate-400 mb-1 italic">Nota interna:</p>
+                        <Textarea value={notaInterna} onChange={e=>onNotaChange(e.target.value)} placeholder="Ej: Debe pagar siempre en efectivo." className="h-14 resize-none text-xs"/>
+                        <p className="text-[10px] text-slate-400 mt-2 italic">Creado el {new Date(budget.created_at).toLocaleDateString('es-UY',{day:'numeric',month:'short',year:'numeric'})}</p>
+                    </div>
+                    <div className="text-right space-y-1 text-xs sm:min-w-[180px]">
+                        <div className="flex justify-between gap-4"><span className="text-slate-500 dark:text-slate-400">Total</span><span className="font-bold">$ {totals.total.toLocaleString('es-UY',{minimumFractionDigits:2,maximumFractionDigits:2})}</span></div>
+                        <div className="flex justify-between gap-4"><span className="text-slate-500 dark:text-slate-400">Pagado</span><span className="font-bold text-emerald-600 dark:text-emerald-400">$ {totals.pagado.toLocaleString('es-UY',{minimumFractionDigits:2,maximumFractionDigits:2})}</span></div>
+                        <div className="flex justify-between gap-4 pt-1 border-t border-slate-200 dark:border-slate-700"><span className="text-slate-500 dark:text-slate-400 font-bold">Por pagar</span><span className={`font-bold ${totals.porPagar>0?'text-red-600 dark:text-red-400':'text-emerald-600 dark:text-emerald-400'}`}>$ {totals.porPagar.toLocaleString('es-UY',{minimumFractionDigits:2,maximumFractionDigits:2})}</span></div>
+                    </div>
+                </div>
+            </div>
+        </>}
+
+        {/* Resumen colapsado */}
+        {!expanded&&<div className="p-3 grid grid-cols-3 gap-2 text-[11px] bg-slate-50 dark:bg-slate-900/30">
+            <div><span className="text-slate-400">Total: </span><span className="font-bold">${totals.total.toLocaleString('es-UY')}</span></div>
+            <div><span className="text-slate-400">Pagado: </span><span className="font-bold text-emerald-600 dark:text-emerald-400">${totals.pagado.toLocaleString('es-UY')}</span></div>
+            <div><span className="text-slate-400">Saldo: </span><span className={`font-bold ${totals.porPagar>0?'text-red-600 dark:text-red-400':'text-emerald-600 dark:text-emerald-400'}`}>${totals.porPagar.toLocaleString('es-UY')}</span></div>
+        </div>}
+
+        {payTarget&&<PayModal item={payTarget} onConfirm={amt=>confirmPay(payTarget,amt)} onClose={()=>setPayTarget(null)}/>}
+    </Card>;
 };
 
 const PatientBudgets=({patient,user,hist,onReload})=>{
     const[budgets,setBudgets]=useState([]);
     const[itemsByBudget,setItemsByBudget]=useState({});
     const[loading,setLoading]=useState(true);
-    const[selected,setSelected]=useState(null);
     const[creating,setCreating]=useState(false);
     const[newTitulo,setNewTitulo]=useState('');
 
@@ -1600,8 +1589,6 @@ const PatientBudgets=({patient,user,hist,onReload})=>{
     };
     useEffect(()=>{load()},[patient.id]);
 
-    const calcTotals=b=>{const items=itemsByBudget[b.id]||[];const total=items.reduce((s,i)=>s+(parseFloat(i.cantidad)||0)*(parseFloat(i.precio_unit)||0),0);const pagado=items.reduce((s,i)=>s+(parseFloat(i.pagado)||0),0);return{total,pagado,porPagar:total-pagado,count:items.length}};
-
     const create=async()=>{
         if(!newTitulo.trim())return toast.warn('Indique el título');
         const b=await S.createBudget({paciente_id:patient.id,titulo:newTitulo.trim(),estado:'creado',odontologo:user.name,deleted:false});
@@ -1610,17 +1597,22 @@ const PatientBudgets=({patient,user,hist,onReload})=>{
             setNewTitulo('');setCreating(false);
             await load();
             if(onReload)onReload();
-            setSelected(b);
             toast.ok('Presupuesto creado');
         }
     };
 
-    const del=async(b)=>{if(!confirm(`¿Eliminar presupuesto "${b.titulo}"? Los pagos ya registrados quedan en el historial.`))return;await S.delBudget(b.id);load()};
+    const del=async(b)=>{if(!confirm(`¿Eliminar presupuesto "${b.titulo}"? Los pagos ya registrados quedan en el historial.`))return;await S.delBudget(b.id);load();if(onReload)onReload()};
 
     // Resumen global
     const globalTotals=useMemo(()=>{
         let total=0,pagado=0;
-        for(const b of budgets){const t=calcTotals(b);total+=t.total;pagado+=t.pagado}
+        for(const b of budgets){
+            const items=itemsByBudget[b.id]||[];
+            for(const i of items){
+                total+=(parseFloat(i.cantidad)||0)*(parseFloat(i.precio_unit)||0);
+                pagado+=(parseFloat(i.pagado)||0);
+            }
+        }
         return{total,pagado,porPagar:total-pagado};
     },[budgets,itemsByBudget]);
 
@@ -1646,36 +1638,10 @@ const PatientBudgets=({patient,user,hist,onReload})=>{
             </div>
         </Card>}
 
-        {/* Lista de presupuestos */}
-        <div className="space-y-2">
-            {budgets.map(b=>{
-                const t=calcTotals(b);
-                const st=BUDGET_STATES[b.estado]||BUDGET_STATES.creado;
-                return<Card key={b.id} className="overflow-hidden">
-                    <button onClick={()=>setSelected(b)} className="w-full p-3 text-left hover:bg-slate-50 dark:hover:bg-slate-700/30 transition-colors">
-                        <div className="flex justify-between items-start gap-2 mb-1">
-                            <div className="min-w-0 flex-1">
-                                <div className="flex items-center gap-2 flex-wrap mb-1">
-                                    <span className={`text-[9px] px-2 py-0.5 rounded-full font-bold ${st.color}`}>{st.icon} {st.label}</span>
-                                    <span className="text-[10px] font-mono text-slate-400">{b.numero}</span>
-                                </div>
-                                <p className="font-bold text-sm truncate">{b.titulo}</p>
-                                <p className="text-[10px] text-slate-400">{t.count} item{t.count!==1?'s':''} · {new Date(b.created_at).toLocaleDateString('es-UY')}</p>
-                            </div>
-                            <button onClick={e=>{e.stopPropagation();del(b)}} className="shrink-0 p-2 text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30 rounded"><Trash2 size={12}/></button>
-                        </div>
-                        <div className="grid grid-cols-3 gap-2 mt-2 text-[11px]">
-                            <div><span className="text-slate-400">Total: </span><span className="font-bold">${t.total.toLocaleString('es-UY')}</span></div>
-                            <div><span className="text-slate-400">Pagado: </span><span className="font-bold text-emerald-600 dark:text-emerald-400">${t.pagado.toLocaleString('es-UY')}</span></div>
-                            <div><span className="text-slate-400">Saldo: </span><span className={`font-bold ${t.porPagar>0?'text-red-600 dark:text-red-400':'text-emerald-600 dark:text-emerald-400'}`}>${t.porPagar.toLocaleString('es-UY')}</span></div>
-                        </div>
-                    </button>
-                </Card>
-            })}
-            {budgets.length===0&&!creating&&<Card className="p-8 text-center"><CreditCard size={32} className="mx-auto text-slate-300 dark:text-slate-600 mb-2"/><p className="text-slate-400 text-xs">Sin presupuestos</p></Card>}
-        </div>
+        {/* Lista apilada de presupuestos completos */}
+        {budgets.map(b=><BudgetCard key={b.id} budget={b} patient={patient} user={user} onChanged={()=>{load();if(onReload)onReload()}} onDelete={()=>del(b)}/>)}
 
-        {selected&&<BudgetDetail budget={selected} patient={patient} user={user} onClose={()=>{setSelected(null);load();if(onReload)onReload()}} onChanged={()=>{load();if(onReload)onReload()}}/>}
+        {budgets.length===0&&!creating&&<Card className="p-8 text-center"><CreditCard size={32} className="mx-auto text-slate-300 dark:text-slate-600 mb-2"/><p className="text-slate-400 text-xs">Sin presupuestos</p></Card>}
     </div>
 };
 
