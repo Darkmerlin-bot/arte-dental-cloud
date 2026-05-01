@@ -15,7 +15,7 @@
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🦷</text></svg>"/>
     <script>
       // Dark mode: aplicar antes de renderizar para evitar flash
-      (function(){try{const t=localStorage.getItem('artedental_theme');if(t==='dark'||(!t&&window.matchMedia('(prefers-color-scheme: dark)').matches)){document.documentElement.classList.add('dark')}}catch(e){}})();
+      (function(){try{const t=localStorage.getItem('artedental_theme');if(t==='dark'||!t){document.documentElement.classList.add('dark')}}catch(e){document.documentElement.classList.add('dark')}})();
     </script>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
