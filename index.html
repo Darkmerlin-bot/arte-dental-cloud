@@ -771,8 +771,10 @@ const PatientHub=({user,patientId,onBack})=>{
     const[loading,setLoading]=useState(true);
 
     useEffect(()=>{loadAll()},[patientId]);
-    const loadAll=async()=>{
-        setLoading(true);
+    const firstHubLoad=useRef(true);
+    const loadAll=async(opts={})=>{
+        const silent=opts?.silent||!firstHubLoad.current;
+        if(!silent)setLoading(true);
         const[p,m,h,i,a,u]=await Promise.all([
             S.getPatient(patientId),
             S.getMed(patientId),
@@ -782,7 +784,7 @@ const PatientHub=({user,patientId,onBack})=>{
             S.getUsers()
         ]);
         setPatient(p);setMedRec(m);setHist(h);setImgs(i);setApps(a);setUsers(u.filter(x=>x.role===Role.ODONTOLOGO));
-        setLoading(false);
+        if(firstHubLoad.current){setLoading(false);firstHubLoad.current=false}
     };
 
     if(loading)return<div className="p-8 text-center text-slate-400"><RefreshCw className="animate-spin mx-auto mb-2" size={24}/>Cargando paciente...</div>;
@@ -1389,8 +1391,15 @@ const BudgetCard=({budget,patient,user,onChanged,onDelete})=>{
     const[expanded,setExpanded]=useState(true);
     const[savingMeta,setSavingMeta]=useState(false);
     const metaTimer=useRef(null);
+    const firstLoad=useRef(true);
 
-    const load=async()=>{setLoading(true);setItems(await S.getBudgetItems(budget.id));setLoading(false)};
+    // Solo muestra spinner la primera vez; después refresca silenciosamente
+    const load=async(silent=false)=>{
+        if(!silent&&firstLoad.current)setLoading(true);
+        const data=await S.getBudgetItems(budget.id);
+        setItems(data);
+        if(firstLoad.current){setLoading(false);firstLoad.current=false}
+    };
     useEffect(()=>{load()},[budget.id]);
 
     const totals=useMemo(()=>{
@@ -1405,7 +1414,7 @@ const BudgetCard=({budget,patient,user,onChanged,onDelete})=>{
             setEstado('terminado');
             S.updateBudget(budget.id,{estado:'terminado'});
             S.saveHist({paciente_id:patient.id,fecha:new Date().toLocaleDateString(),odontologo:user.name,motivo:`PRESUPUESTO ${budget.numero||''} ${titulo} SALDADO`,tipo:'SISTEMA',deleted:false});
-            if(onChanged)onChanged();
+            if(onChanged)onChanged({silent:true});
         }
     },[totals.porPagar]);
 
@@ -1416,35 +1425,60 @@ const BudgetCard=({budget,patient,user,onChanged,onDelete})=>{
             setSavingMeta(true);
             await S.updateBudget(budget.id,patch);
             setSavingMeta(false);
-            if(onChanged)onChanged();
+            if(onChanged)onChanged({silent:true});
         },800);
     };
 
     const onTituloChange=v=>{setTitulo(v);triggerAutoSave({titulo:v})};
-    const onEstadoChange=v=>{setEstado(v);S.updateBudget(budget.id,{estado:v}).then(()=>onChanged&&onChanged())};
+    const onEstadoChange=v=>{setEstado(v);S.updateBudget(budget.id,{estado:v}).then(()=>onChanged&&onChanged({silent:true}))};
     const onNotaChange=v=>{setNotaInterna(v);triggerAutoSave({nota_interna:v})};
 
     const addItem=async()=>{
         if(!newItem.descripcion||!newItem.precio_unit)return toast.warn('Descripción y precio obligatorios');
-        const r=await S.addBudgetItem({budget_id:budget.id,descripcion:newItem.descripcion,cantidad:parseFloat(newItem.cantidad)||1,precio_unit:parseFloat(newItem.precio_unit)||0,pagado:0,orden:items.length});
+        // Optimistic: agregar item temporal con id provisorio
+        const tempId='temp_'+Date.now();
+        const optimistic={id:tempId,budget_id:budget.id,descripcion:newItem.descripcion,cantidad:parseFloat(newItem.cantidad)||1,precio_unit:parseFloat(newItem.precio_unit)||0,pagado:0,nota:'',_pending:true};
+        setItems(arr=>[...arr,optimistic]);
+        const savedDesc=newItem.descripcion;const savedQty=optimistic.cantidad;const savedPrice=optimistic.precio_unit;
+        setNewItem({descripcion:'',cantidad:1,precio_unit:''});
+        const r=await S.addBudgetItem({budget_id:budget.id,descripcion:savedDesc,cantidad:savedQty,precio_unit:savedPrice,pagado:0,orden:items.length});
         if(r){
-            setNewItem({descripcion:'',cantidad:1,precio_unit:''});
-            const subtotal=(parseFloat(r.cantidad)||1)*(parseFloat(r.precio_unit)||0);
-            await S.saveHist({paciente_id:patient.id,fecha:new Date().toLocaleDateString(),odontologo:user.name,motivo:`PRESUPUESTO ${budget.numero||''}: ${r.descripcion} x${r.cantidad} = $${subtotal}`,tipo:'PRESUPUESTO',deleted:false});
-            load();
-            if(onChanged)onChanged();
+            // Reemplazar el item temporal por el real
+            setItems(arr=>arr.map(x=>x.id===tempId?{...r,_pending:false}:x));
+            const subtotal=savedQty*savedPrice;
+            await S.saveHist({paciente_id:patient.id,fecha:new Date().toLocaleDateString(),odontologo:user.name,motivo:`PRESUPUESTO ${budget.numero||''}: ${savedDesc} x${savedQty} = $${subtotal}`,tipo:'PRESUPUESTO',deleted:false});
+            if(onChanged)onChanged({silent:true});
+        }else{
+            // Si falla, quitar el optimista
+            setItems(arr=>arr.filter(x=>x.id!==tempId));
         }
     };
 
-    const updateItem=async(id,patch)=>{const r=await S.updateBudgetItem(id,patch);if(r)load()};
-    const delItem=async(id)=>{if(!confirm('¿Eliminar item?'))return;await S.delBudgetItem(id);load();if(onChanged)onChanged()};
+    const updateItem=async(id,patch)=>{
+        // Optimistic: actualizar localmente al toque
+        setItems(arr=>arr.map(x=>x.id===id?{...x,...patch}:x));
+        await S.updateBudgetItem(id,patch);
+        if(onChanged)onChanged({silent:true});
+    };
+
+    const delItem=async(id)=>{
+        if(!confirm('¿Eliminar item?'))return;
+        // Optimistic: quitar localmente
+        const backup=items;
+        setItems(arr=>arr.filter(x=>x.id!==id));
+        const ok=await S.delBudgetItem(id);
+        if(!ok)setItems(backup);
+        else if(onChanged)onChanged({silent:true});
+    };
 
     const confirmPay=async(item,amt)=>{
         const newPagado=(parseFloat(item.pagado)||0)+amt;
-        await updateItem(item.id,{pagado:newPagado});
+        // Optimistic update
+        setItems(arr=>arr.map(x=>x.id===item.id?{...x,pagado:newPagado}:x));
+        await S.updateBudgetItem(item.id,{pagado:newPagado});
         await S.saveHist({paciente_id:patient.id,fecha:new Date().toLocaleDateString(),odontologo:user.name,motivo:`PAGO ${budget.numero||''} - ${item.descripcion}: $${amt}`,tipo:'PAGO',deleted:false});
         setPayTarget(null);
-        if(onChanged)onChanged();
+        if(onChanged)onChanged({silent:true});
         toast.ok('Pago registrado');
     };
 
@@ -1577,17 +1611,27 @@ const PatientBudgets=({patient,user,hist,onReload})=>{
     const[loading,setLoading]=useState(true);
     const[creating,setCreating]=useState(false);
     const[newTitulo,setNewTitulo]=useState('');
+    const firstLoad=useRef(true);
 
-    const load=async()=>{
-        setLoading(true);
+    // Carga inicial muestra spinner; refresh silencioso después
+    const load=async(opts={})=>{
+        const silent=opts.silent||!firstLoad.current;
+        if(!silent)setLoading(true);
         const bs=await S.getBudgets(patient.id);
         setBudgets(bs);
         const map={};
         for(const b of bs){map[b.id]=await S.getBudgetItems(b.id)}
         setItemsByBudget(map);
-        setLoading(false);
+        if(firstLoad.current){setLoading(false);firstLoad.current=false}
     };
     useEffect(()=>{load()},[patient.id]);
+
+    // Refresh totales globales sin reasignar budgets (para no remontar BudgetCards)
+    const refreshGlobalTotals=async()=>{
+        const map={};
+        for(const b of budgets){map[b.id]=await S.getBudgetItems(b.id)}
+        setItemsByBudget(map);
+    };
 
     const create=async()=>{
         if(!newTitulo.trim())return toast.warn('Indique el título');
@@ -1595,13 +1639,21 @@ const PatientBudgets=({patient,user,hist,onReload})=>{
         if(b){
             await S.saveHist({paciente_id:patient.id,fecha:new Date().toLocaleDateString(),odontologo:user.name,motivo:`PRESUPUESTO CREADO ${b.numero||''} - ${b.titulo}`,tipo:'SISTEMA',deleted:false});
             setNewTitulo('');setCreating(false);
-            await load();
+            // Optimistic: agregar el nuevo presupuesto al inicio
+            setBudgets(arr=>[b,...arr]);
+            setItemsByBudget(m=>({...m,[b.id]:[]}));
             if(onReload)onReload();
             toast.ok('Presupuesto creado');
         }
     };
 
-    const del=async(b)=>{if(!confirm(`¿Eliminar presupuesto "${b.titulo}"? Los pagos ya registrados quedan en el historial.`))return;await S.delBudget(b.id);load();if(onReload)onReload()};
+    const del=async(b)=>{
+        if(!confirm(`¿Eliminar presupuesto "${b.titulo}"? Los pagos ya registrados quedan en el historial.`))return;
+        // Optimistic
+        setBudgets(arr=>arr.filter(x=>x.id!==b.id));
+        await S.delBudget(b.id);
+        if(onReload)onReload();
+    };
 
     // Resumen global
     const globalTotals=useMemo(()=>{
@@ -1639,7 +1691,7 @@ const PatientBudgets=({patient,user,hist,onReload})=>{
         </Card>}
 
         {/* Lista apilada de presupuestos completos */}
-        {budgets.map(b=><BudgetCard key={b.id} budget={b} patient={patient} user={user} onChanged={()=>{load();if(onReload)onReload()}} onDelete={()=>del(b)}/>)}
+        {budgets.map(b=><BudgetCard key={b.id} budget={b} patient={patient} user={user} onChanged={(opts)=>{refreshGlobalTotals();if(onReload)onReload({silent:true})}} onDelete={()=>del(b)}/>)}
 
         {budgets.length===0&&!creating&&<Card className="p-8 text-center"><CreditCard size={32} className="mx-auto text-slate-300 dark:text-slate-600 mb-2"/><p className="text-slate-400 text-xs">Sin presupuestos</p></Card>}
     </div>
