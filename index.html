@@ -1458,32 +1458,93 @@ const BudgetDetail=({budget,patient,user,onClose,onChanged})=>{
                     </div>
                 </Card>
 
-                {/* Items */}
+                {/* Items - estilo Doctocliq */}
                 <Card className="overflow-hidden">
-                    <div className="p-3 border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/50">
-                        <p className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">Tratamientos / Items</p>
-                    </div>
                     {loading?<div className="p-4 text-center"><RefreshCw className="animate-spin inline" size={16}/></div>
-                    :<div className="divide-y divide-slate-200 dark:divide-slate-700">
-                        {items.map(i=>{
-                            const subtotal=(parseFloat(i.cantidad)||0)*(parseFloat(i.precio_unit)||0);
-                            const pagado=parseFloat(i.pagado)||0;
-                            const porPagar=subtotal-pagado;
-                            const saldado=porPagar<=0;
-                            return<div key={i.id} className="p-3 grid grid-cols-12 gap-2 items-center text-xs">
-                                <div className="col-span-12 sm:col-span-4 font-bold">{i.descripcion}</div>
-                                <div className="col-span-3 sm:col-span-1 text-center"><span className="text-slate-400 sm:hidden text-[9px] block">Cant</span>{i.cantidad}</div>
-                                <div className="col-span-3 sm:col-span-2 text-right"><span className="text-slate-400 sm:hidden text-[9px] block">Precio</span>${(parseFloat(i.precio_unit)||0).toLocaleString('es-UY')}</div>
-                                <div className="col-span-3 sm:col-span-2 text-right text-emerald-600 dark:text-emerald-400 font-bold"><span className="text-slate-400 sm:hidden text-[9px] block">Pagado</span>${pagado.toLocaleString('es-UY')}</div>
-                                <div className={`col-span-3 sm:col-span-2 text-right font-bold ${saldado?'text-emerald-600 dark:text-emerald-400':'text-red-600 dark:text-red-400'}`}><span className="text-slate-400 sm:hidden text-[9px] block">Por pagar</span>${porPagar.toLocaleString('es-UY')}</div>
-                                <div className="col-span-12 sm:col-span-1 flex gap-1 justify-end">
-                                    {saldado?<span className="text-emerald-500 text-base">✓</span>:<button onClick={()=>setPayTarget(i)} className="bg-brand-600 hover:bg-brand-700 text-white px-2 py-1 rounded text-[10px] font-bold">Pagar</button>}
-                                    <button onClick={()=>delItem(i.id)} className="text-red-400 p-1"><Trash2 size={12}/></button>
+                    :<>
+                        {/* Header de columnas (sólo desktop) */}
+                        <div className="hidden sm:grid grid-cols-[24px_1fr_60px_100px_90px_90px_120px_70px] gap-2 items-center px-3 py-2.5 bg-slate-700 dark:bg-slate-900 text-white text-[10px] font-bold uppercase tracking-wide">
+                            <div></div>
+                            <div></div>
+                            <div className="text-center">Cant.</div>
+                            <div className="text-right">Precio Unit.</div>
+                            <div className="text-right">Pagado</div>
+                            <div className="text-right">Por pagar</div>
+                            <div className="pl-2">Comentario</div>
+                            <div></div>
+                        </div>
+
+                        <div className="divide-y divide-slate-200 dark:divide-slate-700">
+                            {items.map(i=>{
+                                const subtotal=(parseFloat(i.cantidad)||0)*(parseFloat(i.precio_unit)||0);
+                                const pagado=parseFloat(i.pagado)||0;
+                                const porPagar=subtotal-pagado;
+                                const saldado=porPagar<=0&&subtotal>0;
+                                const parcial=pagado>0&&!saldado;
+                                // Círculo de progreso: vacío / mitad / lleno
+                                const Icon=()=>{
+                                    if(saldado)return<svg viewBox="0 0 16 16" width="16" height="16"><circle cx="8" cy="8" r="6" fill="#10b981"/></svg>;
+                                    if(parcial)return<svg viewBox="0 0 16 16" width="16" height="16"><circle cx="8" cy="8" r="6" fill="none" stroke="#3b82f6" strokeWidth="1.5"/><path d="M 8 2 A 6 6 0 0 1 8 14 Z" fill="#3b82f6"/></svg>;
+                                    return<svg viewBox="0 0 16 16" width="16" height="16"><circle cx="8" cy="8" r="6" fill="none" stroke="#94a3b8" strokeWidth="1.5"/></svg>;
+                                };
+                                return<div key={i.id} className="px-3 py-2.5 hover:bg-slate-50 dark:hover:bg-slate-700/30">
+                                    {/* Desktop: grid de columnas */}
+                                    <div className="hidden sm:grid grid-cols-[24px_1fr_60px_100px_90px_90px_120px_70px] gap-2 items-center text-xs">
+                                        <div className="flex justify-center"><Icon/></div>
+                                        <div className="font-medium truncate" title={i.descripcion}>{i.descripcion}</div>
+                                        <div className="text-center text-slate-600 dark:text-slate-300">{i.cantidad}</div>
+                                        <div className="text-right text-slate-600 dark:text-slate-300">{(parseFloat(i.precio_unit)||0).toLocaleString('es-UY')}</div>
+                                        <div className="text-right text-slate-600 dark:text-slate-300">{pagado.toLocaleString('es-UY')}</div>
+                                        <div className={`text-right font-bold ${saldado?'text-emerald-600 dark:text-emerald-400':porPagar>0?'text-red-600 dark:text-red-400':'text-slate-500'}`}>{porPagar.toLocaleString('es-UY')}</div>
+                                        <div>
+                                            <input
+                                                type="text"
+                                                value={i.nota||''}
+                                                onChange={e=>setItems(arr=>arr.map(x=>x.id===i.id?{...x,nota:e.target.value}:x))}
+                                                onBlur={e=>updateItem(i.id,{nota:e.target.value})}
+                                                placeholder="+ Agregar nota"
+                                                className="w-full bg-transparent border-0 text-[11px] py-1 px-2 placeholder-slate-300 dark:placeholder-slate-600 focus:bg-white dark:focus:bg-slate-700 focus:ring-1 focus:ring-brand-500 rounded"
+                                                style={{fontSize:'11px'}}
+                                            />
+                                        </div>
+                                        <div className="flex gap-1 justify-end">
+                                            {saldado?<span className="bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-400 px-3 py-1 rounded-full text-[10px] font-bold">✓</span>
+                                            :<button onClick={()=>setPayTarget(i)} className="border border-slate-300 dark:border-slate-600 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 px-3 py-1 rounded-full text-[10px] font-bold">Pagar</button>}
+                                            <button onClick={()=>delItem(i.id)} className="text-slate-400 hover:text-red-500 p-1"><Trash2 size={12}/></button>
+                                        </div>
+                                    </div>
+
+                                    {/* Mobile: vertical compacto */}
+                                    <div className="sm:hidden">
+                                        <div className="flex items-center gap-2 mb-2">
+                                            <Icon/>
+                                            <p className="font-bold text-xs flex-1 truncate">{i.descripcion}</p>
+                                            {saldado?<span className="bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-400 px-2 py-0.5 rounded-full text-[9px] font-bold">✓ Saldado</span>
+                                            :<button onClick={()=>setPayTarget(i)} className="border border-slate-300 dark:border-slate-600 px-2 py-0.5 rounded-full text-[9px] font-bold">Pagar</button>}
+                                        </div>
+                                        <div className="grid grid-cols-4 gap-1 text-[10px] mb-2">
+                                            <div className="text-center"><p className="text-slate-400 text-[9px]">Cant.</p><p>{i.cantidad}</p></div>
+                                            <div className="text-center"><p className="text-slate-400 text-[9px]">Precio</p><p>${(parseFloat(i.precio_unit)||0).toLocaleString('es-UY')}</p></div>
+                                            <div className="text-center"><p className="text-slate-400 text-[9px]">Pagado</p><p>${pagado.toLocaleString('es-UY')}</p></div>
+                                            <div className="text-center"><p className="text-slate-400 text-[9px]">Saldo</p><p className={`font-bold ${saldado?'text-emerald-600 dark:text-emerald-400':'text-red-600 dark:text-red-400'}`}>${porPagar.toLocaleString('es-UY')}</p></div>
+                                        </div>
+                                        <div className="flex gap-2 items-center">
+                                            <input
+                                                type="text"
+                                                value={i.nota||''}
+                                                onChange={e=>setItems(arr=>arr.map(x=>x.id===i.id?{...x,nota:e.target.value}:x))}
+                                                onBlur={e=>updateItem(i.id,{nota:e.target.value})}
+                                                placeholder="+ Agregar nota"
+                                                className="flex-1 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded text-[10px] py-1 px-2"
+                                            />
+                                            <button onClick={()=>delItem(i.id)} className="text-slate-400 hover:text-red-500 p-1"><Trash2 size={11}/></button>
+                                        </div>
+                                    </div>
                                 </div>
-                            </div>
-                        })}
-                        {items.length===0&&<div className="p-6 text-center text-slate-300 dark:text-slate-600 text-xs">Sin items. Agregá el primero abajo.</div>}
-                    </div>}
+                            })}
+                            {items.length===0&&<div className="p-6 text-center text-slate-300 dark:text-slate-600 text-xs">Sin items. Agregá el primero abajo.</div>}
+                        </div>
+                    </>}
 
                     {/* Form de nuevo item */}
                     <div className="p-3 border-t border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/30 grid grid-cols-12 gap-2">
@@ -1494,19 +1555,20 @@ const BudgetDetail=({budget,patient,user,onClose,onChanged})=>{
                     </div>
                 </Card>
 
-                {/* Totales */}
+                {/* Nota interna + totales (estilo Doctocliq) */}
                 <Card className="p-4">
-                    <div className="grid grid-cols-3 gap-2 text-center">
-                        <div><p className="text-[10px] text-slate-400">Total</p><p className="font-bold text-base">${totals.total.toLocaleString('es-UY')}</p></div>
-                        <div><p className="text-[10px] text-slate-400">Pagado</p><p className="font-bold text-base text-emerald-600 dark:text-emerald-400">${totals.pagado.toLocaleString('es-UY')}</p></div>
-                        <div><p className="text-[10px] text-slate-400">Por pagar</p><p className={`font-bold text-base ${totals.porPagar>0?'text-red-600 dark:text-red-400':'text-emerald-600 dark:text-emerald-400'}`}>${totals.porPagar.toLocaleString('es-UY')}</p></div>
+                    <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-4 items-start">
+                        <div>
+                            <p className="text-[10px] text-slate-500 dark:text-slate-400 mb-1 italic">Nota interna:</p>
+                            <Textarea value={notaInterna} onChange={e=>setNotaInterna(e.target.value)} placeholder="Ej: Debe pagar siempre en efectivo." className="h-14 resize-none text-xs"/>
+                            <p className="text-[10px] text-slate-400 mt-2 italic">Creado el {new Date(budget.created_at).toLocaleDateString('es-UY',{day:'numeric',month:'short',year:'numeric'})}</p>
+                        </div>
+                        <div className="text-right space-y-1 text-xs sm:min-w-[180px]">
+                            <div className="flex justify-between gap-4"><span className="text-slate-500 dark:text-slate-400">Total</span><span className="font-bold">$ {totals.total.toLocaleString('es-UY',{minimumFractionDigits:2,maximumFractionDigits:2})}</span></div>
+                            <div className="flex justify-between gap-4"><span className="text-slate-500 dark:text-slate-400">Pagado</span><span className="font-bold text-emerald-600 dark:text-emerald-400">$ {totals.pagado.toLocaleString('es-UY',{minimumFractionDigits:2,maximumFractionDigits:2})}</span></div>
+                            <div className="flex justify-between gap-4 pt-1 border-t border-slate-200 dark:border-slate-700"><span className="text-slate-500 dark:text-slate-400 font-bold">Por pagar</span><span className={`font-bold ${totals.porPagar>0?'text-red-600 dark:text-red-400':'text-emerald-600 dark:text-emerald-400'}`}>$ {totals.porPagar.toLocaleString('es-UY',{minimumFractionDigits:2,maximumFractionDigits:2})}</span></div>
+                        </div>
                     </div>
-                </Card>
-
-                {/* Nota interna */}
-                <Card className="p-3">
-                    <p className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase mb-2">Nota interna</p>
-                    <Textarea value={notaInterna} onChange={e=>setNotaInterna(e.target.value)} placeholder="Ej: Debe pagar siempre en efectivo." className="h-16 resize-none text-xs"/>
                 </Card>
             </div>
 
