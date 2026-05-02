@@ -762,6 +762,7 @@ const PatientHub=({user,patientId,onBack})=>{
     const[imgs,setImgs]=useState([]);
     const[apps,setApps]=useState([]);
     const[users,setUsers]=useState([]);
+    const[treatments,setTreatments]=useState([]);
     const[loading,setLoading]=useState(true);
 
     useEffect(()=>{loadAll()},[patientId]);
@@ -769,15 +770,16 @@ const PatientHub=({user,patientId,onBack})=>{
     const loadAll=async(opts={})=>{
         const silent=opts?.silent||!firstHubLoad.current;
         if(!silent)setLoading(true);
-        const[p,m,h,i,a,u]=await Promise.all([
+        const[p,m,h,i,a,u,t]=await Promise.all([
             S.getPatient(patientId),
             S.getMed(patientId),
             S.getHist(patientId),
             S.getImgs(patientId),
             S.getAppsByPatient(patientId),
-            S.getUsers()
+            S.getUsers(),
+            S.getTreatments(patientId)
         ]);
-        setPatient(p);setMedRec(m);setHist(h);setImgs(i);setApps(a);setUsers(u.filter(x=>x.role===Role.ODONTOLOGO));
+        setPatient(p);setMedRec(m);setHist(h);setImgs(i);setApps(a);setUsers(u.filter(x=>x.role===Role.ODONTOLOGO));setTreatments(t);
         if(firstHubLoad.current){setLoading(false);firstHubLoad.current=false}
     };
 
@@ -862,7 +864,7 @@ const PatientHub=({user,patientId,onBack})=>{
                 {/* Sub-tabs móvil */}
                 <div className="lg:hidden"><TabsVertical mobile={true}/></div>
 
-                {tab==='resumen'&&<PatientResumen patient={patient} medRec={medRec} hist={hist} apps={apps} saldo={saldo} onGoTab={setTab}/>}
+                {tab==='resumen'&&<PatientResumen patient={patient} medRec={medRec} hist={hist} apps={apps} treatments={treatments} saldo={saldo} onGoTab={setTab}/>}
                 {tab==='ficha'&&<PatientFicha patient={patient} medRec={medRec} user={user} onSaved={loadAll}/>}
                 {tab==='odo'&&<PatientOdo patient={patient} medRec={medRec} user={user} hist={hist} users={users} onSaved={loadAll} onHistReload={loadAll}/>}
                 {tab==='historia'&&<PatientHistoria patient={patient} hist={hist} users={users} user={user} onReload={loadAll}/>}
@@ -876,10 +878,23 @@ const PatientHub=({user,patientId,onBack})=>{
 };
 
 // --- Sub-vistas del hub ---
-const PatientResumen=({patient,medRec,hist,apps,saldo,onGoTab})=>{
+const PatientResumen=({patient,medRec,hist,apps,treatments=[],saldo,onGoTab})=>{
     const ultEvo=hist.find(h=>h.tipo==='EVOLUCION');
     const ultPago=hist.find(h=>h.tipo==='PAGO');
+    // Pendientes: tratamientos con saldo > 0 que no están rechazados ni abandonados
+    const pendientes=treatments.filter(t=>{const por=(parseFloat(t.cantidad)||0)*(parseFloat(t.precio_unit)||0)-(parseFloat(t.pagado)||0);return por>0&&t.estado!=='rechazado'&&t.estado!=='abandonado'});
+    const totalPendiente=pendientes.reduce((s,t)=>s+((parseFloat(t.cantidad)||0)*(parseFloat(t.precio_unit)||0)-(parseFloat(t.pagado)||0)),0);
     return<div className="space-y-4">
+        {pendientes.length>0&&<Card className="p-4 border-l-4 border-l-amber-500 cursor-pointer hover:bg-amber-50/30 dark:hover:bg-amber-900/10 transition-colors" onClick={()=>onGoTab&&onGoTab('presup')}>
+            <div className="flex items-start justify-between gap-3 mb-2">
+                <div className="flex items-center gap-2 min-w-0">
+                    <AlertTriangle size={16} className="text-amber-500 shrink-0"/>
+                    <p className="text-xs font-bold text-amber-600 dark:text-amber-400 uppercase">Pendiente</p>
+                </div>
+                <p className="font-bold text-base text-red-600 dark:text-red-400 shrink-0">${totalPendiente.toLocaleString('es-UY')}</p>
+            </div>
+            <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">{pendientes.map(t=>t.descripcion).join(', ')}</p>
+        </Card>}
         {ultEvo&&<Card className="p-4 border-l-4 border-l-brand-500">
             <SectionTitle icon={ClipboardList}>Última evolución</SectionTitle>
             <p className="text-[10px] text-slate-400">{ultEvo.fecha} • Dr. {ultEvo.odontologo}</p>
