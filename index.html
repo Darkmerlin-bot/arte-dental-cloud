@@ -1349,6 +1349,32 @@ const TREATMENT_STATES={
     terminado:{label:'Terminado',color:'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300',dot:'#22c55e',icon:'✅'}
 };
 
+// Dropdown custom para estado (evita problemas de contraste de <select> nativo)
+const StateDropdown=({value,onChange})=>{
+    const[open,setOpen]=useState(false);
+    const ref=useRef(null);
+    useEffect(()=>{
+        if(!open)return;
+        const onDoc=e=>{if(ref.current&&!ref.current.contains(e.target))setOpen(false)};
+        document.addEventListener('mousedown',onDoc);
+        return()=>document.removeEventListener('mousedown',onDoc);
+    },[open]);
+    const cur=TREATMENT_STATES[value]||TREATMENT_STATES.creado;
+    return<div className="relative" ref={ref}>
+        <button type="button" onClick={()=>setOpen(!open)} className={`w-full flex items-center justify-between gap-1 text-[10px] px-2 py-1 rounded-full font-bold ${cur.color}`}>
+            <span className="truncate">{cur.icon} {cur.label}</span>
+            <span className="text-[8px] opacity-60">▼</span>
+        </button>
+        {open&&<div className="absolute z-30 mt-1 left-0 w-44 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-xl overflow-hidden">
+            {Object.entries(TREATMENT_STATES).map(([k,v])=><button key={k} type="button" onClick={()=>{onChange(k);setOpen(false)}} className={`w-full text-left px-3 py-2 text-xs font-bold flex items-center gap-2 hover:bg-slate-100 dark:hover:bg-slate-700 ${k===value?'bg-slate-50 dark:bg-slate-700/50':''}`}>
+                <span className="w-2 h-2 rounded-full shrink-0" style={{background:v.dot}}/>
+                <span className="text-slate-700 dark:text-slate-200">{v.icon} {v.label}</span>
+                {k===value&&<CheckCircle2 size={12} className="ml-auto text-emerald-500"/>}
+            </button>)}
+        </div>}
+    </div>;
+};
+
 // Modal pequeño para confirmar pago
 const PayModal=({item,onConfirm,onClose})=>{
     const porPagar=(parseFloat(item.cantidad)||0)*(parseFloat(item.precio_unit)||0)-(parseFloat(item.pagado)||0);
@@ -1374,6 +1400,119 @@ const PayModal=({item,onConfirm,onClose})=>{
 };
 
 // Modal de comentarios
+const GlobalPayModal=({pendientes,onConfirm,onClose})=>{
+    const totalDebido=pendientes.reduce((s,t)=>s+(parseFloat(t.cantidad)||0)*(parseFloat(t.precio_unit)||0)-(parseFloat(t.pagado)||0),0);
+    const[mode,setMode]=useState('fifo'); // 'fifo' | 'manual'
+    const[totalAmt,setTotalAmt]=useState(totalDebido.toString());
+    const[manualAlloc,setManualAlloc]=useState(()=>{const m={};for(const t of pendientes)m[t.id]='';return m});
+    const[saving,setSaving]=useState(false);
+
+    // FIFO preview
+    const fifoAllocations=useMemo(()=>{
+        let restante=parseFloat(totalAmt)||0;
+        const allocs={};
+        for(const t of pendientes){
+            const por=Math.max(0,(parseFloat(t.cantidad)||0)*(parseFloat(t.precio_unit)||0)-(parseFloat(t.pagado)||0));
+            const aplicar=Math.min(restante,por);
+            if(aplicar>0){allocs[t.id]=aplicar;restante-=aplicar}
+            if(restante<=0)break;
+        }
+        return{allocs,sobrante:restante};
+    },[totalAmt,pendientes]);
+
+    const manualTotal=useMemo(()=>Object.values(manualAlloc).reduce((s,v)=>s+(parseFloat(v)||0),0),[manualAlloc]);
+    const manualValido=useMemo(()=>{
+        for(const t of pendientes){
+            const v=parseFloat(manualAlloc[t.id])||0;
+            const por=Math.max(0,(parseFloat(t.cantidad)||0)*(parseFloat(t.precio_unit)||0)-(parseFloat(t.pagado)||0));
+            if(v<0)return{ok:false,err:'Hay montos negativos'};
+            if(v>por)return{ok:false,err:`Excede saldo de "${t.descripcion}"`};
+        }
+        return{ok:manualTotal>0,err:manualTotal<=0?'Indique al menos un monto':null};
+    },[manualAlloc,manualTotal,pendientes]);
+
+    const aplicar=async()=>{
+        setSaving(true);
+        try{
+            if(mode==='fifo'){
+                const v=parseFloat(totalAmt)||0;
+                if(v<=0)return toast.warn('Monto inválido');
+                if(v>totalDebido)return toast.warn('Excede el saldo total');
+                await onConfirm(fifoAllocations.allocs);
+            }else{
+                if(!manualValido.ok)return toast.warn(manualValido.err);
+                const allocs={};
+                for(const[k,v]of Object.entries(manualAlloc)){const n=parseFloat(v)||0;if(n>0)allocs[k]=n}
+                await onConfirm(allocs);
+            }
+        }finally{setSaving(false)}
+    };
+
+    return<Portal><div className="fixed inset-0 bg-black/60 z-[200] flex items-center justify-center p-2 sm:p-4" onClick={onClose}>
+        <div className="bg-white dark:bg-slate-800 w-full sm:max-w-lg rounded-2xl flex flex-col animate-fade-in" style={{maxHeight:'calc(100vh - 1rem)'}} onClick={e=>e.stopPropagation()}>
+            <div className="flex justify-between items-center p-4 border-b border-slate-200 dark:border-slate-700 shrink-0">
+                <div><h3 className="font-bold text-base">Pago global</h3><p className="text-xs text-slate-500 dark:text-slate-400">{pendientes.length} tratamiento{pendientes.length!==1?'s':''} pendiente{pendientes.length!==1?'s':''} · Saldo total ${totalDebido.toLocaleString('es-UY')}</p></div>
+                <button onClick={onClose} className="shrink-0 p-1"><X size={20} className="text-slate-400"/></button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-4 space-y-3 min-h-0">
+                {/* Selector de modo */}
+                <div className="flex bg-slate-100 dark:bg-slate-700 rounded-lg p-0.5">
+                    <button onClick={()=>setMode('fifo')} className={`flex-1 py-2 rounded text-xs font-bold ${mode==='fifo'?'bg-white dark:bg-slate-900 shadow text-brand-600 dark:text-brand-400':'text-slate-500 dark:text-slate-400'}`}>FIFO automático</button>
+                    <button onClick={()=>setMode('manual')} className={`flex-1 py-2 rounded text-xs font-bold ${mode==='manual'?'bg-white dark:bg-slate-900 shadow text-brand-600 dark:text-brand-400':'text-slate-500 dark:text-slate-400'}`}>Manual</button>
+                </div>
+
+                {mode==='fifo'?<>
+                    <div>
+                        <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 mb-1 block">Monto total a aplicar</label>
+                        <Input type="number" value={totalAmt} onChange={e=>setTotalAmt(e.target.value)} placeholder="$ 0" autoFocus/>
+                        <p className="text-[10px] text-slate-400 mt-1">Se aplica primero a los tratamientos más antiguos hasta agotar el monto</p>
+                    </div>
+
+                    <Card className="p-3 bg-slate-50 dark:bg-slate-700/30">
+                        <p className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase mb-2">Distribución prevista:</p>
+                        <div className="space-y-1">
+                            {pendientes.map(t=>{
+                                const por=Math.max(0,(parseFloat(t.cantidad)||0)*(parseFloat(t.precio_unit)||0)-(parseFloat(t.pagado)||0));
+                                const ap=fifoAllocations.allocs[t.id]||0;
+                                if(por<=0)return null;
+                                return<div key={t.id} className="flex justify-between items-center text-xs gap-2">
+                                    <span className="truncate flex-1">{t.descripcion}</span>
+                                    <span className="text-slate-400 text-[10px] shrink-0">deuda ${por.toLocaleString('es-UY')}</span>
+                                    <span className={`font-bold shrink-0 ${ap>0?'text-emerald-600 dark:text-emerald-400':'text-slate-300'}`}>+ ${ap.toLocaleString('es-UY')}</span>
+                                </div>
+                            })}
+                        </div>
+                        {fifoAllocations.sobrante>0&&<p className="text-[10px] text-amber-600 dark:text-amber-400 mt-2 font-bold">⚠️ Sobran ${fifoAllocations.sobrante.toLocaleString('es-UY')} sin asignar (excede el saldo total)</p>}
+                    </Card>
+                </>:<>
+                    <p className="text-[10px] text-slate-400">Indicá cuánto pagar de cada tratamiento:</p>
+                    <div className="space-y-2">
+                        {pendientes.map(t=>{
+                            const por=Math.max(0,(parseFloat(t.cantidad)||0)*(parseFloat(t.precio_unit)||0)-(parseFloat(t.pagado)||0));
+                            if(por<=0)return null;
+                            return<div key={t.id} className="grid grid-cols-[1fr_auto_120px] gap-2 items-center text-xs bg-slate-50 dark:bg-slate-700/30 p-2 rounded-lg">
+                                <span className="truncate">{t.descripcion}</span>
+                                <span className="text-slate-400 text-[10px]">debe ${por.toLocaleString('es-UY')}</span>
+                                <Input type="number" placeholder="0" value={manualAlloc[t.id]||''} onChange={e=>setManualAlloc(m=>({...m,[t.id]:e.target.value}))} className="text-xs py-1.5"/>
+                            </div>
+                        })}
+                    </div>
+                    <div className="flex justify-between items-center pt-2 border-t border-slate-200 dark:border-slate-700">
+                        <span className="text-xs font-bold text-slate-500 dark:text-slate-400">Total a aplicar:</span>
+                        <span className="font-bold text-base text-emerald-600 dark:text-emerald-400">${manualTotal.toLocaleString('es-UY')}</span>
+                    </div>
+                </>}
+            </div>
+
+            <div className="p-3 border-t border-slate-200 dark:border-slate-700 shrink-0 safe-bottom flex gap-2">
+                <Btn onClick={aplicar} disabled={saving} variant="success" className="flex-1 py-2.5 text-sm">{saving?'Procesando...':'Confirmar pago'}</Btn>
+                <Btn variant="secondary" onClick={onClose} className="flex-1 py-2.5 text-sm">Cancelar</Btn>
+            </div>
+        </div>
+    </div></Portal>;
+};
+
 const CommentsModal=({treatment,user,onClose,onChanged})=>{
     const[comments,setComments]=useState([]);
     const[loading,setLoading]=useState(true);
@@ -1428,6 +1567,7 @@ const PatientTreatments=({patient,user,onReload})=>{
     const[newItem,setNewItem]=useState({descripcion:'',cantidad:1,precio_unit:''});
     const[payTarget,setPayTarget]=useState(null);
     const[commentsTarget,setCommentsTarget]=useState(null);
+    const[globalPayOpen,setGlobalPayOpen]=useState(false);
     const firstLoad=useRef(true);
 
     const load=async(opts={})=>{
@@ -1505,21 +1645,79 @@ const PatientTreatments=({patient,user,onReload})=>{
         toast.ok('Pago registrado');
     };
 
+    const confirmGlobalPay=async(allocations)=>{
+        // Aplicar a cada tratamiento, registrar en history
+        const updates=[];
+        let total=0;
+        for(const[tid,amt]of Object.entries(allocations)){
+            const t=treatments.find(x=>String(x.id)===String(tid));
+            if(!t)continue;
+            const subtotal=(parseFloat(t.cantidad)||0)*(parseFloat(t.precio_unit)||0);
+            const newPagado=(parseFloat(t.pagado)||0)+amt;
+            const patch={pagado:newPagado};
+            if(newPagado>=subtotal&&subtotal>0){patch.estado='terminado'}
+            updates.push({t,patch,amt});
+            total+=amt;
+        }
+        // Aplicar todos los cambios optimistas a la vez
+        setTreatments(arr=>arr.map(x=>{const u=updates.find(u=>u.t.id===x.id);return u?{...x,...u.patch}:x}));
+        // Persistir en backend
+        for(const u of updates){
+            await S.updateTreatment(u.t.id,u.patch);
+            await S.saveHist({paciente_id:patient.id,fecha:new Date().toLocaleDateString(),odontologo:user.name,motivo:`PAGO - ${u.t.descripcion}: $${u.amt}`,tipo:'PAGO',deleted:false});
+            if(u.patch.estado==='terminado'){
+                await S.saveHist({paciente_id:patient.id,fecha:new Date().toLocaleDateString(),odontologo:user.name,motivo:`Tratamiento "${u.t.descripcion}" SALDADO`,tipo:'SISTEMA',deleted:false});
+            }
+        }
+        // Registro resumen
+        await S.saveHist({paciente_id:patient.id,fecha:new Date().toLocaleDateString(),odontologo:user.name,motivo:`PAGO GLOBAL: $${total} (distribuido en ${updates.length} tratamiento${updates.length!==1?'s':''})`,tipo:'SISTEMA',deleted:false});
+        setGlobalPayOpen(false);
+        if(onReload)onReload({silent:true});
+        toast.ok(`Pago global de $${total.toLocaleString('es-UY')} aplicado`);
+    };
+
     // Filtros
     const FILTERS=[['todos','Todos'],['creado','Creados'],['aceptado','Aceptados'],['rechazado','Rechazados'],['abandonado','Abandonados'],['terminado','Saldados']];
     const filtered=useMemo(()=>filter==='todos'?treatments:treatments.filter(t=>t.estado===filter),[treatments,filter]);
     const counts=useMemo(()=>{const c={todos:treatments.length};for(const k of Object.keys(TREATMENT_STATES))c[k]=treatments.filter(t=>t.estado===k).length;return c},[treatments]);
 
+    // Pendientes para pago global
+    const pendientes=useMemo(()=>treatments.filter(t=>{const por=(parseFloat(t.cantidad)||0)*(parseFloat(t.precio_unit)||0)-(parseFloat(t.pagado)||0);return por>0&&t.estado!=='rechazado'&&t.estado!=='abandonado'}),[treatments]);
+
+    // KPIs detallados
+    const kpis=useMemo(()=>{
+        const aceptados=treatments.filter(t=>t.estado==='aceptado').length;
+        const enCurso=treatments.filter(t=>{const p=(parseFloat(t.cantidad)||0)*(parseFloat(t.precio_unit)||0)-(parseFloat(t.pagado)||0);return p>0&&p<(parseFloat(t.cantidad)||0)*(parseFloat(t.precio_unit)||0)}).length;
+        const saldados=treatments.filter(t=>t.estado==='terminado').length;
+        const totalAceptado=treatments.filter(t=>t.estado!=='rechazado'&&t.estado!=='abandonado').reduce((s,t)=>s+(parseFloat(t.cantidad)||0)*(parseFloat(t.precio_unit)||0),0);
+        const totalRechazado=treatments.filter(t=>t.estado==='rechazado'||t.estado==='abandonado').reduce((s,t)=>s+(parseFloat(t.cantidad)||0)*(parseFloat(t.precio_unit)||0),0);
+        return{aceptados,enCurso,saldados,totalAceptado,totalRechazado};
+    },[treatments]);
+
     if(loading)return<div className="p-8 text-center text-slate-400"><RefreshCw className="animate-spin mx-auto" size={20}/></div>;
 
     return<div className="space-y-4">
-        {/* Resumen global */}
+        {/* Resumen principal */}
         <Card className="p-4">
-            <div className="grid grid-cols-3 gap-2 text-center">
+            <div className="grid grid-cols-3 gap-2 text-center mb-3">
                 <div><p className="text-[10px] text-slate-400 uppercase font-bold">Total</p><p className="font-bold text-lg">${totals.total.toLocaleString('es-UY')}</p></div>
-                <div><p className="text-[10px] text-slate-400 uppercase font-bold">Pagado</p><p className="font-bold text-lg text-emerald-600 dark:text-emerald-400">${totals.pagado.toLocaleString('es-UY')}</p></div>
+                <div><p className="text-[10px] text-slate-400 uppercase font-bold">Cobrado</p><p className="font-bold text-lg text-emerald-600 dark:text-emerald-400">${totals.pagado.toLocaleString('es-UY')}</p></div>
                 <div><p className="text-[10px] text-slate-400 uppercase font-bold">Saldo</p><p className={`font-bold text-lg ${totals.porPagar>0?'text-red-600 dark:text-red-400':'text-emerald-600 dark:text-emerald-400'}`}>${totals.porPagar.toLocaleString('es-UY')}</p></div>
             </div>
+            {/* Barra de progreso de cobro */}
+            {totals.total>0&&<div className="mb-3">
+                <div className="flex justify-between text-[9px] text-slate-400 mb-1"><span>Progreso de cobro</span><span>{Math.round((totals.pagado/totals.total)*100)}%</span></div>
+                <div className="h-1.5 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden"><div className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400" style={{width:`${Math.min(100,(totals.pagado/totals.total)*100)}%`}}/></div>
+            </div>}
+            {/* KPIs secundarios */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center pt-3 border-t border-slate-200 dark:border-slate-700">
+                <div><p className="text-[9px] text-slate-400 uppercase">Tratamientos</p><p className="font-bold text-sm">{treatments.length}</p></div>
+                <div><p className="text-[9px] text-slate-400 uppercase">En curso</p><p className="font-bold text-sm text-amber-600 dark:text-amber-400">{kpis.enCurso}</p></div>
+                <div><p className="text-[9px] text-slate-400 uppercase">Saldados</p><p className="font-bold text-sm text-emerald-600 dark:text-emerald-400">{kpis.saldados}</p></div>
+                <div><p className="text-[9px] text-slate-400 uppercase">Pendientes</p><p className="font-bold text-sm text-red-600 dark:text-red-400">{pendientes.length}</p></div>
+            </div>
+            {/* Botón de pago global */}
+            {pendientes.length>1&&totals.porPagar>0&&<Btn onClick={()=>setGlobalPayOpen(true)} variant="success" className="w-full mt-3 py-2 text-xs"><DollarSign size={14} className="inline mr-1"/>Pago global ({pendientes.length} pendientes · ${totals.porPagar.toLocaleString('es-UY')})</Btn>}
         </Card>
 
         {/* Filtros */}
@@ -1556,9 +1754,7 @@ const PatientTreatments=({patient,user,onReload})=>{
                         {/* Desktop */}
                         <div className="hidden md:grid grid-cols-[110px_1fr_60px_100px_90px_90px_70px_70px] gap-2 items-center text-xs">
                             <div>
-                                <select value={t.estado} onChange={e=>onChangeEstado(t,e.target.value)} className={`w-full text-[10px] px-2 py-1 rounded-full font-bold border-0 cursor-pointer ${st.color}`}>
-                                    {Object.entries(TREATMENT_STATES).map(([k,v])=><option key={k} value={k}>{v.icon} {v.label}</option>)}
-                                </select>
+                                <StateDropdown value={t.estado} onChange={v=>onChangeEstado(t,v)}/>
                             </div>
                             <div className="font-medium truncate" title={t.descripcion}>{t.descripcion}</div>
                             <div className="text-center text-slate-600 dark:text-slate-300">{t.cantidad}</div>
@@ -1580,9 +1776,7 @@ const PatientTreatments=({patient,user,onReload})=>{
                         {/* Mobile vertical */}
                         <div className="md:hidden">
                             <div className="flex items-center gap-2 mb-2">
-                                <select value={t.estado} onChange={e=>onChangeEstado(t,e.target.value)} className={`text-[10px] px-2 py-1 rounded-full font-bold border-0 ${st.color}`}>
-                                    {Object.entries(TREATMENT_STATES).map(([k,v])=><option key={k} value={k}>{v.icon} {v.label}</option>)}
-                                </select>
+                                <div className="shrink-0"><StateDropdown value={t.estado} onChange={v=>onChangeEstado(t,v)}/></div>
                                 <p className="font-bold text-xs flex-1 truncate">{t.descripcion}</p>
                             </div>
                             <div className="grid grid-cols-4 gap-1 text-[10px] mb-2">
@@ -1616,6 +1810,7 @@ const PatientTreatments=({patient,user,onReload})=>{
 
         {payTarget&&<PayModal item={payTarget} onConfirm={amt=>confirmPay(payTarget,amt)} onClose={()=>setPayTarget(null)}/>}
         {commentsTarget&&<CommentsModal treatment={commentsTarget} user={user} onClose={()=>setCommentsTarget(null)} onChanged={()=>load({silent:true})}/>}
+        {globalPayOpen&&<GlobalPayModal pendientes={pendientes} onConfirm={confirmGlobalPay} onClose={()=>setGlobalPayOpen(false)}/>}
     </div>
 };
 
@@ -1824,7 +2019,7 @@ const Admin=({user,online,onUserUpdated})=>{
             <Card className="p-6 text-center"><Upload size={32} className="mx-auto text-emerald-600 dark:text-emerald-400 mb-2"/><h4 className="font-bold mb-2">Importar</h4><input type="file" ref={fileRef} accept=".json" className="hidden" onChange={async e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=async ev=>{if(await S.import(ev.target.result)){toast.ok('Importado, recargando...');setTimeout(()=>window.location.reload(),1500)}};r.readAsText(f)}}/><Btn variant="success" onClick={()=>fileRef.current.click()} className="w-full py-3 text-sm">Cargar</Btn></Card>
         </div>}
 
-        {tab==='info'&&<div className="bg-gradient-to-br from-slate-800 to-indigo-900 p-6 rounded-xl text-white text-center"><Cloud size={40} className="mx-auto mb-2"/><h4 className="text-lg font-bold mb-2">Sistema en la Nube</h4><p className="text-white/80 text-sm mb-3">Supabase Auth + Database</p><div className={`inline-flex items-center gap-2 px-4 py-2 rounded-full ${online?'bg-emerald-500':'bg-red-500'}`}>{online?<><Wifi size={16}/>Conectado</>:<><WifiOff size={16}/>Offline</>}</div><p className="text-white/60 text-[10px] mt-3">v3.6 • Tratamientos planos + Comentarios</p></div>}
+        {tab==='info'&&<div className="bg-gradient-to-br from-slate-800 to-indigo-900 p-6 rounded-xl text-white text-center"><Cloud size={40} className="mx-auto mb-2"/><h4 className="text-lg font-bold mb-2">Sistema en la Nube</h4><p className="text-white/80 text-sm mb-3">Supabase Auth + Database</p><div className={`inline-flex items-center gap-2 px-4 py-2 rounded-full ${online?'bg-emerald-500':'bg-red-500'}`}>{online?<><Wifi size={16}/>Conectado</>:<><WifiOff size={16}/>Offline</>}</div><p className="text-white/60 text-[10px] mt-3">v3.7 • Pago global + KPIs detallados</p></div>}
     </div>
 };
 
@@ -1898,7 +2093,7 @@ const App=()=>{
             {tab==='admin'&&<Admin user={user} online={online} onUserUpdated={u=>setUser({...user,...u})}/>}
         </main>
 
-        <footer className="p-2 text-center text-[10px] text-slate-400 no-print safe-bottom">Arte Dental © 2025 • v3.6 • {online?'🟢':'🔴'}</footer>
+        <footer className="p-2 text-center text-[10px] text-slate-400 no-print safe-bottom">Arte Dental © 2025 • v3.7 • {online?'🟢':'🔴'}</footer>
     </div>
 };
 
