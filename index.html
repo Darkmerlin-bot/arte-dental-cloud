@@ -165,24 +165,18 @@ const S={
     saveConsentRecord:r=>DB.insert('consent_records',r),
     updateConsentRecord:(id,r)=>DB.update('consent_records',id,r),
     delConsentRecord:id=>DB.update('consent_records',id,{deleted:true}),
-    // Presupuestos
+    // Tratamientos (lista plana, reemplaza a presupuestos+items)
+    getTreatments:pid=>DB.getAll('treatments',{notDeleted:true,eq:{paciente_id:pid},orderBy:'created_at',asc:false}),
+    addTreatment:t=>DB.insert('treatments',t),
+    updateTreatment:(id,t)=>DB.update('treatments',id,{...t,updated_at:new Date().toISOString()}),
+    delTreatment:id=>DB.update('treatments',id,{deleted:true}),
+    // Comentarios por tratamiento
+    getTreatmentComments:tid=>DB.getAll('treatment_comments',{eq:{treatment_id:tid},orderBy:'created_at',asc:true}),
+    addTreatmentComment:c=>DB.insert('treatment_comments',c),
+    delTreatmentComment:id=>DB.delete('treatment_comments',id),
+    // Mantener legacy de budgets por compatibilidad pero ya no se usan en UI nueva
     getBudgets:pid=>DB.getAll('budgets',{notDeleted:true,eq:{paciente_id:pid},orderBy:'id',asc:false}),
-    getBudgetItems:bid=>DB.getAll('budget_items',{eq:{budget_id:bid},orderBy:'orden'}),
-    createBudget:async b=>{
-        const row=await DB.insert('budgets',b);
-        if(row&&!row.numero){
-            // Asignar número incremental basado en el id
-            const numero='#'+String(row.id).padStart(4,'0');
-            await DB.update('budgets',row.id,{numero});
-            return{...row,numero};
-        }
-        return row;
-    },
-    updateBudget:(id,b)=>DB.update('budgets',id,{...b,updated_at:new Date().toISOString()}),
-    delBudget:id=>DB.update('budgets',id,{deleted:true}),
-    addBudgetItem:i=>DB.insert('budget_items',i),
-    updateBudgetItem:(id,i)=>DB.update('budget_items',id,i),
-    delBudgetItem:id=>DB.delete('budget_items',id)
+    getBudgetItems:bid=>DB.getAll('budget_items',{eq:{budget_id:bid},orderBy:'orden'})
 };
 
 const isPast=(d,t)=>d&&t?new Date(d+'T'+t)<new Date():false;
@@ -795,7 +789,7 @@ const PatientHub=({user,patientId,onBack})=>{
         {id:'ficha',label:'Ficha',icon:FileHeart},
         {id:'odo',label:'Odontograma',icon:Activity},
         {id:'historia',label:'Historia',icon:FileText},
-        {id:'presup',label:'Presupuestos',icon:CreditCard},
+        {id:'presup',label:'Tratamientos',icon:CreditCard},
         {id:'fotos',label:'Fotos',icon:ImageIcon},
         {id:'citas',label:'Citas',icon:Calendar},
         {id:'consent',label:'Consentimientos',icon:ClipboardList}
@@ -872,7 +866,7 @@ const PatientHub=({user,patientId,onBack})=>{
                 {tab==='ficha'&&<PatientFicha patient={patient} medRec={medRec} user={user} onSaved={loadAll}/>}
                 {tab==='odo'&&<PatientOdo patient={patient} medRec={medRec} user={user} hist={hist} users={users} onSaved={loadAll} onHistReload={loadAll}/>}
                 {tab==='historia'&&<PatientHistoria patient={patient} hist={hist} users={users} user={user} onReload={loadAll}/>}
-                {tab==='presup'&&<PatientBudgets patient={patient} user={user} hist={hist} onReload={loadAll}/>}
+                {tab==='presup'&&<PatientTreatments patient={patient} user={user} onReload={loadAll}/>}
                 {tab==='fotos'&&<PatientFotos patient={patient} imgs={imgs} onReload={loadAll}/>}
                 {tab==='citas'&&<PatientCitas patient={patient} apps={apps} onReload={loadAll}/>}
                 {tab==='consent'&&<PatientConsents patient={patient} user={user}/>}
@@ -997,7 +991,7 @@ const PatientHistoria=({patient,hist,users,user,onReload})=>{
             <Select value={form.dr} onChange={e=>setForm({...form,dr:e.target.value})} className="mb-2"><option value="">Odontólogo...</option>{users.map(u=><option key={u.id} value={u.name}>{u.name}</option>)}</Select>
             <Textarea value={form.tto} onChange={e=>setForm({...form,tto:e.target.value})} placeholder="Tratamiento realizado..." className="h-20 resize-none mb-2"/>
             <Btn onClick={saveEvo} className="w-full py-2 text-sm">Guardar Evolución</Btn>
-            <p className="text-[10px] text-slate-400 mt-2 italic">💡 Para registrar pagos y presupuestos usá la pestaña <span className="font-bold">Presupuestos</span></p>
+            <p className="text-[10px] text-slate-400 mt-2 italic">💡 Para registrar pagos y presupuestos usá la pestaña <span className="font-bold">Tratamientos</span></p>
         </Card>
 
         {/* Sub-pestañas internas */}
@@ -1346,13 +1340,13 @@ const ConsentViewer=({record,onClose})=>{
     </div></Portal>
 };
 
-// ===== PRESUPUESTOS =====
-const BUDGET_STATES={
-    creado:{label:'Creado',color:'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300',icon:'📋'},
-    aceptado:{label:'Aceptado',color:'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300',icon:'👍'},
-    rechazado:{label:'Rechazado',color:'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300',icon:'👎'},
-    abandonado:{label:'Abandonado',color:'bg-slate-200 text-slate-600 dark:bg-slate-700 dark:text-slate-400',icon:'🕯️'},
-    terminado:{label:'Terminado',color:'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300',icon:'✅'}
+// ===== TRATAMIENTOS (lista plana) =====
+const TREATMENT_STATES={
+    creado:{label:'Creado',color:'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300',dot:'#3b82f6',icon:'📋'},
+    aceptado:{label:'Aceptado',color:'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300',dot:'#10b981',icon:'👍'},
+    rechazado:{label:'Rechazado',color:'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300',dot:'#f97316',icon:'👎'},
+    abandonado:{label:'Abandonado',color:'bg-slate-200 text-slate-600 dark:bg-slate-700 dark:text-slate-400',dot:'#94a3b8',icon:'🕯️'},
+    terminado:{label:'Terminado',color:'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300',dot:'#22c55e',icon:'✅'}
 };
 
 // Modal pequeño para confirmar pago
@@ -1362,12 +1356,12 @@ const PayModal=({item,onConfirm,onClose})=>{
     const aplicar=async()=>{
         const v=parseFloat(amt)||0;
         if(v<=0)return toast.warn('Monto inválido');
-        if(v>porPagar)return toast.warn('Excede el saldo de este item');
+        if(v>porPagar)return toast.warn('Excede el saldo de este tratamiento');
         await onConfirm(v);
     };
     return<Portal><div className="fixed inset-0 bg-black/60 z-[200] flex items-center justify-center p-4" onClick={onClose}>
         <div className="bg-white dark:bg-slate-800 rounded-xl p-4 max-w-xs w-full" onClick={e=>e.stopPropagation()}>
-            <h4 className="font-bold text-sm mb-2">Pagar item</h4>
+            <h4 className="font-bold text-sm mb-2">Pagar tratamiento</h4>
             <p className="text-xs text-slate-500 mb-1">{item.descripcion}</p>
             <p className="text-[10px] text-slate-400 mb-3">Por pagar: ${porPagar.toLocaleString('es-UY')}</p>
             <Input type="number" value={amt} onChange={e=>setAmt(e.target.value)} placeholder="Monto" className="mb-3" autoFocus/>
@@ -1379,294 +1373,142 @@ const PayModal=({item,onConfirm,onClose})=>{
     </div></Portal>;
 };
 
-// Tarjeta de presupuesto inline (sin modal)
-const BudgetCard=({budget,patient,user,onChanged,onDelete})=>{
-    const[items,setItems]=useState([]);
+// Modal de comentarios
+const CommentsModal=({treatment,user,onClose,onChanged})=>{
+    const[comments,setComments]=useState([]);
     const[loading,setLoading]=useState(true);
-    const[notaInterna,setNotaInterna]=useState(budget.nota_interna||'');
-    const[titulo,setTitulo]=useState(budget.titulo||'Presupuesto');
-    const[estado,setEstado]=useState(budget.estado);
-    const[newItem,setNewItem]=useState({descripcion:'',cantidad:1,precio_unit:''});
-    const[payTarget,setPayTarget]=useState(null);
-    const[expanded,setExpanded]=useState(true);
-    const[savingMeta,setSavingMeta]=useState(false);
-    const metaTimer=useRef(null);
-    const firstLoad=useRef(true);
-
-    // Solo muestra spinner la primera vez; después refresca silenciosamente
-    const load=async(silent=false)=>{
-        if(!silent&&firstLoad.current)setLoading(true);
-        const data=await S.getBudgetItems(budget.id);
-        setItems(data);
-        if(firstLoad.current){setLoading(false);firstLoad.current=false}
+    const[texto,setTexto]=useState('');
+    const[saving,setSaving]=useState(false);
+    const load=async()=>{setLoading(true);setComments(await S.getTreatmentComments(treatment.id));setLoading(false)};
+    useEffect(()=>{load()},[treatment.id]);
+    const add=async()=>{
+        if(!texto.trim())return;
+        setSaving(true);
+        const r=await S.addTreatmentComment({treatment_id:treatment.id,autor:user.name||'Sistema',texto:texto.trim()});
+        setSaving(false);
+        if(r){setTexto('');load();if(onChanged)onChanged()}
     };
-    useEffect(()=>{load()},[budget.id]);
-
-    const totals=useMemo(()=>{
-        const total=items.reduce((s,i)=>s+(parseFloat(i.cantidad)||0)*(parseFloat(i.precio_unit)||0),0);
-        const pagado=items.reduce((s,i)=>s+(parseFloat(i.pagado)||0),0);
-        return{total,pagado,porPagar:total-pagado};
-    },[items]);
-
-    // Auto-terminado al saldar
-    useEffect(()=>{
-        if(items.length>0&&totals.porPagar<=0&&estado!=='terminado'&&estado!=='rechazado'&&estado!=='abandonado'){
-            setEstado('terminado');
-            S.updateBudget(budget.id,{estado:'terminado'});
-            S.saveHist({paciente_id:patient.id,fecha:new Date().toLocaleDateString(),odontologo:user.name,motivo:`PRESUPUESTO ${budget.numero||''} ${titulo} SALDADO`,tipo:'SISTEMA',deleted:false});
-            if(onChanged)onChanged({silent:true});
-        }
-    },[totals.porPagar]);
-
-    // Autosave debounceado para titulo/estado/nota
-    const triggerAutoSave=(patch)=>{
-        clearTimeout(metaTimer.current);
-        metaTimer.current=setTimeout(async()=>{
-            setSavingMeta(true);
-            await S.updateBudget(budget.id,patch);
-            setSavingMeta(false);
-            if(onChanged)onChanged({silent:true});
-        },800);
-    };
-
-    const onTituloChange=v=>{setTitulo(v);triggerAutoSave({titulo:v})};
-    const onEstadoChange=v=>{setEstado(v);S.updateBudget(budget.id,{estado:v}).then(()=>onChanged&&onChanged({silent:true}))};
-    const onNotaChange=v=>{setNotaInterna(v);triggerAutoSave({nota_interna:v})};
-
-    const addItem=async()=>{
-        if(!newItem.descripcion||!newItem.precio_unit)return toast.warn('Descripción y precio obligatorios');
-        // Optimistic: agregar item temporal con id provisorio
-        const tempId='temp_'+Date.now();
-        const optimistic={id:tempId,budget_id:budget.id,descripcion:newItem.descripcion,cantidad:parseFloat(newItem.cantidad)||1,precio_unit:parseFloat(newItem.precio_unit)||0,pagado:0,nota:'',_pending:true};
-        setItems(arr=>[...arr,optimistic]);
-        const savedDesc=newItem.descripcion;const savedQty=optimistic.cantidad;const savedPrice=optimistic.precio_unit;
-        setNewItem({descripcion:'',cantidad:1,precio_unit:''});
-        const r=await S.addBudgetItem({budget_id:budget.id,descripcion:savedDesc,cantidad:savedQty,precio_unit:savedPrice,pagado:0,orden:items.length});
-        if(r){
-            // Reemplazar el item temporal por el real
-            setItems(arr=>arr.map(x=>x.id===tempId?{...r,_pending:false}:x));
-            const subtotal=savedQty*savedPrice;
-            await S.saveHist({paciente_id:patient.id,fecha:new Date().toLocaleDateString(),odontologo:user.name,motivo:`PRESUPUESTO ${budget.numero||''}: ${savedDesc} x${savedQty} = $${subtotal}`,tipo:'PRESUPUESTO',deleted:false});
-            if(onChanged)onChanged({silent:true});
-        }else{
-            // Si falla, quitar el optimista
-            setItems(arr=>arr.filter(x=>x.id!==tempId));
-        }
-    };
-
-    const updateItem=async(id,patch)=>{
-        // Optimistic: actualizar localmente al toque
-        setItems(arr=>arr.map(x=>x.id===id?{...x,...patch}:x));
-        await S.updateBudgetItem(id,patch);
-        if(onChanged)onChanged({silent:true});
-    };
-
-    const delItem=async(id)=>{
-        if(!confirm('¿Eliminar item?'))return;
-        // Optimistic: quitar localmente
-        const backup=items;
-        setItems(arr=>arr.filter(x=>x.id!==id));
-        const ok=await S.delBudgetItem(id);
-        if(!ok)setItems(backup);
-        else if(onChanged)onChanged({silent:true});
-    };
-
-    const confirmPay=async(item,amt)=>{
-        const newPagado=(parseFloat(item.pagado)||0)+amt;
-        // Optimistic update
-        setItems(arr=>arr.map(x=>x.id===item.id?{...x,pagado:newPagado}:x));
-        await S.updateBudgetItem(item.id,{pagado:newPagado});
-        await S.saveHist({paciente_id:patient.id,fecha:new Date().toLocaleDateString(),odontologo:user.name,motivo:`PAGO ${budget.numero||''} - ${item.descripcion}: $${amt}`,tipo:'PAGO',deleted:false});
-        setPayTarget(null);
-        if(onChanged)onChanged({silent:true});
-        toast.ok('Pago registrado');
-    };
-
-    const st=BUDGET_STATES[estado]||BUDGET_STATES.creado;
-
-    return<Card className="overflow-hidden">
-        {/* Header del presupuesto */}
-        <div className="p-3 border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/50">
-            <div className="flex items-start gap-2 mb-2 flex-wrap">
-                <button onClick={()=>setExpanded(!expanded)} className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"><ChevronLeft size={16} className={expanded?'rotate-90 transition-transform':'-rotate-90 transition-transform'}/></button>
-                <span className="text-[10px] font-mono text-slate-400 mt-1.5">{budget.numero}</span>
-                <select value={estado} onChange={e=>onEstadoChange(e.target.value)} className={`text-[10px] px-2 py-1 rounded-full font-bold border-0 cursor-pointer ${st.color}`}>
-                    {Object.entries(BUDGET_STATES).map(([k,v])=><option key={k} value={k}>{v.icon} {v.label}</option>)}
-                </select>
-                <input value={titulo} onChange={e=>onTituloChange(e.target.value)} className="flex-1 min-w-0 font-bold text-sm bg-transparent border-0 focus:bg-white dark:focus:bg-slate-700 focus:ring-1 focus:ring-brand-500 rounded px-2 py-1"/>
-                {savingMeta&&<span className="text-[9px] text-slate-400 mt-2">guardando...</span>}
-                <button onClick={onDelete} className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30 rounded" title="Eliminar presupuesto"><Trash2 size={14}/></button>
+    const del=async(c)=>{if(!confirm('¿Eliminar este comentario?'))return;await S.delTreatmentComment(c.id);load();if(onChanged)onChanged()};
+    return<Portal><div className="fixed inset-0 bg-black/60 z-[200] flex items-center justify-center p-2 sm:p-4" onClick={onClose}>
+        <div className="bg-white dark:bg-slate-800 w-full sm:max-w-md rounded-2xl flex flex-col animate-fade-in" style={{maxHeight:'calc(100vh - 1rem)'}} onClick={e=>e.stopPropagation()}>
+            <div className="flex justify-between items-center p-4 border-b border-slate-200 dark:border-slate-700 shrink-0">
+                <div className="min-w-0 flex-1"><h3 className="font-bold text-base truncate">Comentarios</h3><p className="text-xs text-slate-500 dark:text-slate-400 truncate">{treatment.descripcion}</p></div>
+                <button onClick={onClose} className="shrink-0 p-1"><X size={20} className="text-slate-400"/></button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-4 space-y-2 min-h-0">
+                {loading?<div className="text-center py-4"><RefreshCw className="animate-spin inline" size={16}/></div>
+                :comments.length===0?<p className="text-xs text-slate-400 text-center py-4">Aún no hay comentarios</p>
+                :comments.map(c=><div key={c.id} className="bg-slate-50 dark:bg-slate-700/30 rounded-lg p-3 text-xs">
+                    <div className="flex justify-between items-start gap-2 mb-1">
+                        <span className="font-bold text-brand-600 dark:text-brand-400">{c.autor||'Anónimo'}</span>
+                        <div className="flex items-center gap-1 shrink-0">
+                            <span className="text-[9px] text-slate-400">{new Date(c.created_at).toLocaleDateString('es-UY')} {new Date(c.created_at).toLocaleTimeString('es-UY',{hour:'2-digit',minute:'2-digit'})}</span>
+                            <button onClick={()=>del(c)} className="text-red-400 hover:text-red-500 p-0.5"><Trash2 size={11}/></button>
+                        </div>
+                    </div>
+                    <p className="whitespace-pre-wrap">{c.texto}</p>
+                </div>)}
+            </div>
+            <div className="p-3 border-t border-slate-200 dark:border-slate-700 shrink-0 safe-bottom space-y-2">
+                <Textarea value={texto} onChange={e=>setTexto(e.target.value)} placeholder="Agregar comentario..." className="h-16 resize-none text-xs"/>
+                <div className="flex gap-2">
+                    <Btn onClick={add} disabled={saving||!texto.trim()} className="flex-1 py-2 text-sm">{saving?'Guardando...':'Agregar comentario'}</Btn>
+                    <Btn variant="secondary" onClick={onClose} className="px-4 py-2 text-sm">Cerrar</Btn>
+                </div>
             </div>
         </div>
-
-        {expanded&&<>
-            {/* Tabla de items estilo Doctocliq */}
-            {loading?<div className="p-4 text-center"><RefreshCw className="animate-spin inline" size={16}/></div>
-            :<>
-                <div className="hidden sm:grid grid-cols-[24px_1fr_60px_100px_90px_90px_120px_70px] gap-2 items-center px-3 py-2.5 bg-slate-700 dark:bg-slate-900 text-white text-[10px] font-bold uppercase tracking-wide">
-                    <div></div>
-                    <div></div>
-                    <div className="text-center">Cant.</div>
-                    <div className="text-right">Precio Unit.</div>
-                    <div className="text-right">Pagado</div>
-                    <div className="text-right">Por pagar</div>
-                    <div className="pl-2">Comentario</div>
-                    <div></div>
-                </div>
-
-                <div className="divide-y divide-slate-200 dark:divide-slate-700">
-                    {items.map(i=>{
-                        const subtotal=(parseFloat(i.cantidad)||0)*(parseFloat(i.precio_unit)||0);
-                        const pagado=parseFloat(i.pagado)||0;
-                        const porPagar=subtotal-pagado;
-                        const saldado=porPagar<=0&&subtotal>0;
-                        const parcial=pagado>0&&!saldado;
-                        const Icon=()=>{
-                            if(saldado)return<svg viewBox="0 0 16 16" width="16" height="16"><circle cx="8" cy="8" r="6" fill="#10b981"/></svg>;
-                            if(parcial)return<svg viewBox="0 0 16 16" width="16" height="16"><circle cx="8" cy="8" r="6" fill="none" stroke="#3b82f6" strokeWidth="1.5"/><path d="M 8 2 A 6 6 0 0 1 8 14 Z" fill="#3b82f6"/></svg>;
-                            return<svg viewBox="0 0 16 16" width="16" height="16"><circle cx="8" cy="8" r="6" fill="none" stroke="#94a3b8" strokeWidth="1.5"/></svg>;
-                        };
-                        return<div key={i.id} className="px-3 py-2.5 hover:bg-slate-50 dark:hover:bg-slate-700/30">
-                            <div className="hidden sm:grid grid-cols-[24px_1fr_60px_100px_90px_90px_120px_70px] gap-2 items-center text-xs">
-                                <div className="flex justify-center"><Icon/></div>
-                                <div className="font-medium truncate" title={i.descripcion}>{i.descripcion}</div>
-                                <div className="text-center text-slate-600 dark:text-slate-300">{i.cantidad}</div>
-                                <div className="text-right text-slate-600 dark:text-slate-300">{(parseFloat(i.precio_unit)||0).toLocaleString('es-UY')}</div>
-                                <div className="text-right text-slate-600 dark:text-slate-300">{pagado.toLocaleString('es-UY')}</div>
-                                <div className={`text-right font-bold ${saldado?'text-emerald-600 dark:text-emerald-400':porPagar>0?'text-red-600 dark:text-red-400':'text-slate-500'}`}>{porPagar.toLocaleString('es-UY')}</div>
-                                <div>
-                                    <input type="text" value={i.nota||''} onChange={e=>setItems(arr=>arr.map(x=>x.id===i.id?{...x,nota:e.target.value}:x))} onBlur={e=>updateItem(i.id,{nota:e.target.value})} placeholder="+ Agregar nota" className="w-full bg-transparent border-0 text-[11px] py-1 px-2 placeholder-slate-300 dark:placeholder-slate-600 focus:bg-white dark:focus:bg-slate-700 focus:ring-1 focus:ring-brand-500 rounded"/>
-                                </div>
-                                <div className="flex gap-1 justify-end">
-                                    {saldado?<span className="bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-400 px-3 py-1 rounded-full text-[10px] font-bold">✓</span>
-                                    :<button onClick={()=>setPayTarget(i)} className="border border-slate-300 dark:border-slate-600 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 px-3 py-1 rounded-full text-[10px] font-bold">Pagar</button>}
-                                    <button onClick={()=>delItem(i.id)} className="text-slate-400 hover:text-red-500 p-1"><Trash2 size={12}/></button>
-                                </div>
-                            </div>
-
-                            {/* Mobile vertical */}
-                            <div className="sm:hidden">
-                                <div className="flex items-center gap-2 mb-2">
-                                    <Icon/>
-                                    <p className="font-bold text-xs flex-1 truncate">{i.descripcion}</p>
-                                    {saldado?<span className="bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-400 px-2 py-0.5 rounded-full text-[9px] font-bold">✓ Saldado</span>
-                                    :<button onClick={()=>setPayTarget(i)} className="border border-slate-300 dark:border-slate-600 px-2 py-0.5 rounded-full text-[9px] font-bold">Pagar</button>}
-                                </div>
-                                <div className="grid grid-cols-4 gap-1 text-[10px] mb-2">
-                                    <div className="text-center"><p className="text-slate-400 text-[9px]">Cant.</p><p>{i.cantidad}</p></div>
-                                    <div className="text-center"><p className="text-slate-400 text-[9px]">Precio</p><p>${(parseFloat(i.precio_unit)||0).toLocaleString('es-UY')}</p></div>
-                                    <div className="text-center"><p className="text-slate-400 text-[9px]">Pagado</p><p>${pagado.toLocaleString('es-UY')}</p></div>
-                                    <div className="text-center"><p className="text-slate-400 text-[9px]">Saldo</p><p className={`font-bold ${saldado?'text-emerald-600 dark:text-emerald-400':'text-red-600 dark:text-red-400'}`}>${porPagar.toLocaleString('es-UY')}</p></div>
-                                </div>
-                                <div className="flex gap-2 items-center">
-                                    <input type="text" value={i.nota||''} onChange={e=>setItems(arr=>arr.map(x=>x.id===i.id?{...x,nota:e.target.value}:x))} onBlur={e=>updateItem(i.id,{nota:e.target.value})} placeholder="+ Agregar nota" className="flex-1 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded text-[10px] py-1 px-2"/>
-                                    <button onClick={()=>delItem(i.id)} className="text-slate-400 hover:text-red-500 p-1"><Trash2 size={11}/></button>
-                                </div>
-                            </div>
-                        </div>
-                    })}
-                    {items.length===0&&<div className="p-6 text-center text-slate-300 dark:text-slate-600 text-xs">Sin items. Agregá el primero abajo.</div>}
-                </div>
-            </>}
-
-            {/* Form de nuevo item */}
-            <div className="p-3 border-t border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/30 grid grid-cols-12 gap-2">
-                <Input className="col-span-12 sm:col-span-6 text-xs py-1.5" placeholder="Descripción del tratamiento" value={newItem.descripcion} onChange={e=>setNewItem({...newItem,descripcion:e.target.value})}/>
-                <Input type="number" className="col-span-4 sm:col-span-2 text-xs py-1.5" placeholder="Cant" value={newItem.cantidad} onChange={e=>setNewItem({...newItem,cantidad:e.target.value})}/>
-                <Input type="number" className="col-span-8 sm:col-span-3 text-xs py-1.5" placeholder="Precio unit." value={newItem.precio_unit} onChange={e=>setNewItem({...newItem,precio_unit:e.target.value})}/>
-                <Btn onClick={addItem} className="col-span-12 sm:col-span-1 text-xs py-1.5">+</Btn>
-            </div>
-
-            {/* Nota interna + totales */}
-            <div className="p-4 border-t border-slate-200 dark:border-slate-700">
-                <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-4 items-start">
-                    <div>
-                        <p className="text-[10px] text-slate-500 dark:text-slate-400 mb-1 italic">Nota interna:</p>
-                        <Textarea value={notaInterna} onChange={e=>onNotaChange(e.target.value)} placeholder="Ej: Debe pagar siempre en efectivo." className="h-14 resize-none text-xs"/>
-                        <p className="text-[10px] text-slate-400 mt-2 italic">Creado el {new Date(budget.created_at).toLocaleDateString('es-UY',{day:'numeric',month:'short',year:'numeric'})}</p>
-                    </div>
-                    <div className="text-right space-y-1 text-xs sm:min-w-[180px]">
-                        <div className="flex justify-between gap-4"><span className="text-slate-500 dark:text-slate-400">Total</span><span className="font-bold">$ {totals.total.toLocaleString('es-UY',{minimumFractionDigits:2,maximumFractionDigits:2})}</span></div>
-                        <div className="flex justify-between gap-4"><span className="text-slate-500 dark:text-slate-400">Pagado</span><span className="font-bold text-emerald-600 dark:text-emerald-400">$ {totals.pagado.toLocaleString('es-UY',{minimumFractionDigits:2,maximumFractionDigits:2})}</span></div>
-                        <div className="flex justify-between gap-4 pt-1 border-t border-slate-200 dark:border-slate-700"><span className="text-slate-500 dark:text-slate-400 font-bold">Por pagar</span><span className={`font-bold ${totals.porPagar>0?'text-red-600 dark:text-red-400':'text-emerald-600 dark:text-emerald-400'}`}>$ {totals.porPagar.toLocaleString('es-UY',{minimumFractionDigits:2,maximumFractionDigits:2})}</span></div>
-                    </div>
-                </div>
-            </div>
-        </>}
-
-        {/* Resumen colapsado */}
-        {!expanded&&<div className="p-3 grid grid-cols-3 gap-2 text-[11px] bg-slate-50 dark:bg-slate-900/30">
-            <div><span className="text-slate-400">Total: </span><span className="font-bold">${totals.total.toLocaleString('es-UY')}</span></div>
-            <div><span className="text-slate-400">Pagado: </span><span className="font-bold text-emerald-600 dark:text-emerald-400">${totals.pagado.toLocaleString('es-UY')}</span></div>
-            <div><span className="text-slate-400">Saldo: </span><span className={`font-bold ${totals.porPagar>0?'text-red-600 dark:text-red-400':'text-emerald-600 dark:text-emerald-400'}`}>${totals.porPagar.toLocaleString('es-UY')}</span></div>
-        </div>}
-
-        {payTarget&&<PayModal item={payTarget} onConfirm={amt=>confirmPay(payTarget,amt)} onClose={()=>setPayTarget(null)}/>}
-    </Card>;
+    </div></Portal>;
 };
 
-const PatientBudgets=({patient,user,hist,onReload})=>{
-    const[budgets,setBudgets]=useState([]);
-    const[itemsByBudget,setItemsByBudget]=useState({});
+const PatientTreatments=({patient,user,onReload})=>{
+    const[treatments,setTreatments]=useState([]);
+    const[commentCounts,setCommentCounts]=useState({});
     const[loading,setLoading]=useState(true);
-    const[creating,setCreating]=useState(false);
-    const[newTitulo,setNewTitulo]=useState('');
+    const[filter,setFilter]=useState('todos');
+    const[newItem,setNewItem]=useState({descripcion:'',cantidad:1,precio_unit:''});
+    const[payTarget,setPayTarget]=useState(null);
+    const[commentsTarget,setCommentsTarget]=useState(null);
     const firstLoad=useRef(true);
 
-    // Carga inicial muestra spinner; refresh silencioso después
     const load=async(opts={})=>{
         const silent=opts.silent||!firstLoad.current;
         if(!silent)setLoading(true);
-        const bs=await S.getBudgets(patient.id);
-        setBudgets(bs);
-        const map={};
-        for(const b of bs){map[b.id]=await S.getBudgetItems(b.id)}
-        setItemsByBudget(map);
+        const ts=await S.getTreatments(patient.id);
+        setTreatments(ts);
+        // Cargar contadores de comentarios en paralelo
+        const counts={};
+        await Promise.all(ts.map(async t=>{const cs=await S.getTreatmentComments(t.id);counts[t.id]=cs.length}));
+        setCommentCounts(counts);
         if(firstLoad.current){setLoading(false);firstLoad.current=false}
     };
     useEffect(()=>{load()},[patient.id]);
 
-    // Refresh totales globales sin reasignar budgets (para no remontar BudgetCards)
-    const refreshGlobalTotals=async()=>{
-        const map={};
-        for(const b of budgets){map[b.id]=await S.getBudgetItems(b.id)}
-        setItemsByBudget(map);
-    };
-
-    const create=async()=>{
-        if(!newTitulo.trim())return toast.warn('Indique el título');
-        const b=await S.createBudget({paciente_id:patient.id,titulo:newTitulo.trim(),estado:'creado',odontologo:user.name,deleted:false});
-        if(b){
-            await S.saveHist({paciente_id:patient.id,fecha:new Date().toLocaleDateString(),odontologo:user.name,motivo:`PRESUPUESTO CREADO ${b.numero||''} - ${b.titulo}`,tipo:'SISTEMA',deleted:false});
-            setNewTitulo('');setCreating(false);
-            // Optimistic: agregar el nuevo presupuesto al inicio
-            setBudgets(arr=>[b,...arr]);
-            setItemsByBudget(m=>({...m,[b.id]:[]}));
-            if(onReload)onReload();
-            toast.ok('Presupuesto creado');
-        }
-    };
-
-    const del=async(b)=>{
-        if(!confirm(`¿Eliminar presupuesto "${b.titulo}"? Los pagos ya registrados quedan en el historial.`))return;
-        // Optimistic
-        setBudgets(arr=>arr.filter(x=>x.id!==b.id));
-        await S.delBudget(b.id);
-        if(onReload)onReload();
-    };
-
-    // Resumen global
-    const globalTotals=useMemo(()=>{
-        let total=0,pagado=0;
-        for(const b of budgets){
-            const items=itemsByBudget[b.id]||[];
-            for(const i of items){
-                total+=(parseFloat(i.cantidad)||0)*(parseFloat(i.precio_unit)||0);
-                pagado+=(parseFloat(i.pagado)||0);
-            }
-        }
+    const totals=useMemo(()=>{
+        const filtered=treatments;
+        const total=filtered.reduce((s,i)=>s+(parseFloat(i.cantidad)||0)*(parseFloat(i.precio_unit)||0),0);
+        const pagado=filtered.reduce((s,i)=>s+(parseFloat(i.pagado)||0),0);
         return{total,pagado,porPagar:total-pagado};
-    },[budgets,itemsByBudget]);
+    },[treatments]);
+
+    const addTreatment=async()=>{
+        if(!newItem.descripcion||!newItem.precio_unit)return toast.warn('Descripción y precio obligatorios');
+        const tempId='temp_'+Date.now();
+        const optimistic={id:tempId,paciente_id:patient.id,descripcion:newItem.descripcion,cantidad:parseFloat(newItem.cantidad)||1,precio_unit:parseFloat(newItem.precio_unit)||0,pagado:0,estado:'creado',odontologo:user.name,created_at:new Date().toISOString(),_pending:true};
+        setTreatments(arr=>[optimistic,...arr]);
+        setCommentCounts(c=>({...c,[tempId]:0}));
+        const desc=newItem.descripcion;const qty=optimistic.cantidad;const price=optimistic.precio_unit;
+        setNewItem({descripcion:'',cantidad:1,precio_unit:''});
+        const r=await S.addTreatment({paciente_id:patient.id,descripcion:desc,cantidad:qty,precio_unit:price,pagado:0,estado:'creado',odontologo:user.name,deleted:false});
+        if(r){
+            setTreatments(arr=>arr.map(x=>x.id===tempId?{...r,_pending:false}:x));
+            setCommentCounts(c=>{const nc={...c};nc[r.id]=0;delete nc[tempId];return nc});
+            await S.saveHist({paciente_id:patient.id,fecha:new Date().toLocaleDateString(),odontologo:user.name,motivo:`TRATAMIENTO: ${desc} x${qty} = $${qty*price}`,tipo:'PRESUPUESTO',deleted:false});
+            if(onReload)onReload({silent:true});
+        }else{
+            setTreatments(arr=>arr.filter(x=>x.id!==tempId));
+        }
+    };
+
+    const updateField=async(id,patch)=>{
+        setTreatments(arr=>arr.map(x=>x.id===id?{...x,...patch}:x));
+        await S.updateTreatment(id,patch);
+        if(onReload)onReload({silent:true});
+    };
+
+    const onChangeEstado=async(t,nuevo)=>{
+        await updateField(t.id,{estado:nuevo});
+        await S.saveHist({paciente_id:patient.id,fecha:new Date().toLocaleDateString(),odontologo:user.name,motivo:`Estado de "${t.descripcion}" cambió a ${TREATMENT_STATES[nuevo]?.label||nuevo}`,tipo:'SISTEMA',deleted:false});
+    };
+
+    const delTreatment=async(t)=>{
+        if(!confirm(`¿Eliminar tratamiento "${t.descripcion}"? Los pagos quedan en el historial.`))return;
+        const backup=treatments;
+        setTreatments(arr=>arr.filter(x=>x.id!==t.id));
+        const ok=await S.delTreatment(t.id);
+        if(!ok)setTreatments(backup);
+        else if(onReload)onReload({silent:true});
+    };
+
+    const confirmPay=async(t,amt)=>{
+        const newPagado=(parseFloat(t.pagado)||0)+amt;
+        const subtotal=(parseFloat(t.cantidad)||0)*(parseFloat(t.precio_unit)||0);
+        const patch={pagado:newPagado};
+        if(newPagado>=subtotal&&subtotal>0){patch.estado='terminado'}
+        setTreatments(arr=>arr.map(x=>x.id===t.id?{...x,...patch}:x));
+        await S.updateTreatment(t.id,patch);
+        await S.saveHist({paciente_id:patient.id,fecha:new Date().toLocaleDateString(),odontologo:user.name,motivo:`PAGO - ${t.descripcion}: $${amt}`,tipo:'PAGO',deleted:false});
+        if(patch.estado==='terminado'){
+            await S.saveHist({paciente_id:patient.id,fecha:new Date().toLocaleDateString(),odontologo:user.name,motivo:`Tratamiento "${t.descripcion}" SALDADO`,tipo:'SISTEMA',deleted:false});
+        }
+        setPayTarget(null);
+        if(onReload)onReload({silent:true});
+        toast.ok('Pago registrado');
+    };
+
+    // Filtros
+    const FILTERS=[['todos','Todos'],['creado','Creados'],['aceptado','Aceptados'],['rechazado','Rechazados'],['abandonado','Abandonados'],['terminado','Saldados']];
+    const filtered=useMemo(()=>filter==='todos'?treatments:treatments.filter(t=>t.estado===filter),[treatments,filter]);
+    const counts=useMemo(()=>{const c={todos:treatments.length};for(const k of Object.keys(TREATMENT_STATES))c[k]=treatments.filter(t=>t.estado===k).length;return c},[treatments]);
 
     if(loading)return<div className="p-8 text-center text-slate-400"><RefreshCw className="animate-spin mx-auto" size={20}/></div>;
 
@@ -1674,26 +1516,106 @@ const PatientBudgets=({patient,user,hist,onReload})=>{
         {/* Resumen global */}
         <Card className="p-4">
             <div className="grid grid-cols-3 gap-2 text-center">
-                <div><p className="text-[10px] text-slate-400 uppercase font-bold">Total</p><p className="font-bold text-lg">${globalTotals.total.toLocaleString('es-UY')}</p></div>
-                <div><p className="text-[10px] text-slate-400 uppercase font-bold">Pagado</p><p className="font-bold text-lg text-emerald-600 dark:text-emerald-400">${globalTotals.pagado.toLocaleString('es-UY')}</p></div>
-                <div><p className="text-[10px] text-slate-400 uppercase font-bold">Saldo</p><p className={`font-bold text-lg ${globalTotals.porPagar>0?'text-red-600 dark:text-red-400':'text-emerald-600 dark:text-emerald-400'}`}>${globalTotals.porPagar.toLocaleString('es-UY')}</p></div>
+                <div><p className="text-[10px] text-slate-400 uppercase font-bold">Total</p><p className="font-bold text-lg">${totals.total.toLocaleString('es-UY')}</p></div>
+                <div><p className="text-[10px] text-slate-400 uppercase font-bold">Pagado</p><p className="font-bold text-lg text-emerald-600 dark:text-emerald-400">${totals.pagado.toLocaleString('es-UY')}</p></div>
+                <div><p className="text-[10px] text-slate-400 uppercase font-bold">Saldo</p><p className={`font-bold text-lg ${totals.porPagar>0?'text-red-600 dark:text-red-400':'text-emerald-600 dark:text-emerald-400'}`}>${totals.porPagar.toLocaleString('es-UY')}</p></div>
             </div>
         </Card>
 
-        {/* Crear nuevo */}
-        {!creating?<Btn onClick={()=>setCreating(true)} className="w-full py-3"><PlusCircle size={16} className="inline mr-2"/>Nuevo Presupuesto</Btn>
-        :<Card className="p-3 space-y-2">
-            <Input value={newTitulo} onChange={e=>setNewTitulo(e.target.value)} placeholder="Título (ej: Endodoncia + Corona pieza 26)" autoFocus/>
-            <div className="flex gap-2">
-                <Btn onClick={create} className="flex-1 py-2 text-sm">Crear</Btn>
-                <Btn variant="secondary" onClick={()=>{setCreating(false);setNewTitulo('')}} className="flex-1 py-2 text-sm">Cancelar</Btn>
+        {/* Filtros */}
+        <div className="flex gap-1 overflow-x-auto scrollbar-hide pb-1">
+            {FILTERS.map(([k,l])=>{const c=counts[k]||0;const active=filter===k;return<button key={k} onClick={()=>setFilter(k)} className={`shrink-0 flex items-center gap-1 px-3 py-1.5 rounded-full text-[11px] font-bold whitespace-nowrap ${active?'bg-brand-600 text-white':'bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400'}`}>
+                {l}
+                {c>0&&<span className={`text-[9px] px-1.5 rounded-full ${active?'bg-white/30':'bg-slate-200 dark:bg-slate-600'}`}>{c}</span>}
+            </button>})}
+        </div>
+
+        {/* Tabla de tratamientos estilo Doctocliq */}
+        <Card className="overflow-hidden">
+            {/* Header de columnas (sólo desktop) */}
+            <div className="hidden md:grid grid-cols-[110px_1fr_60px_100px_90px_90px_70px_70px] gap-2 items-center px-3 py-2.5 bg-slate-700 dark:bg-slate-900 text-white text-[10px] font-bold uppercase tracking-wide">
+                <div>Estado</div>
+                <div>Tratamiento</div>
+                <div className="text-center">Cant.</div>
+                <div className="text-right">Precio Unit.</div>
+                <div className="text-right">Pagado</div>
+                <div className="text-right">Por pagar</div>
+                <div className="text-center">Coment.</div>
+                <div></div>
             </div>
-        </Card>}
 
-        {/* Lista apilada de presupuestos completos */}
-        {budgets.map(b=><BudgetCard key={b.id} budget={b} patient={patient} user={user} onChanged={(opts)=>{refreshGlobalTotals();if(onReload)onReload({silent:true})}} onDelete={()=>del(b)}/>)}
+            <div className="divide-y divide-slate-200 dark:divide-slate-700">
+                {filtered.map(t=>{
+                    const subtotal=(parseFloat(t.cantidad)||0)*(parseFloat(t.precio_unit)||0);
+                    const pagado=parseFloat(t.pagado)||0;
+                    const porPagar=subtotal-pagado;
+                    const saldado=porPagar<=0&&subtotal>0;
+                    const st=TREATMENT_STATES[t.estado]||TREATMENT_STATES.creado;
+                    const cc=commentCounts[t.id]||0;
+                    return<div key={t.id} className={`px-3 py-2.5 hover:bg-slate-50 dark:hover:bg-slate-700/30 ${t._pending?'opacity-60':''}`}>
+                        {/* Desktop */}
+                        <div className="hidden md:grid grid-cols-[110px_1fr_60px_100px_90px_90px_70px_70px] gap-2 items-center text-xs">
+                            <div>
+                                <select value={t.estado} onChange={e=>onChangeEstado(t,e.target.value)} className={`w-full text-[10px] px-2 py-1 rounded-full font-bold border-0 cursor-pointer ${st.color}`}>
+                                    {Object.entries(TREATMENT_STATES).map(([k,v])=><option key={k} value={k}>{v.icon} {v.label}</option>)}
+                                </select>
+                            </div>
+                            <div className="font-medium truncate" title={t.descripcion}>{t.descripcion}</div>
+                            <div className="text-center text-slate-600 dark:text-slate-300">{t.cantidad}</div>
+                            <div className="text-right text-slate-600 dark:text-slate-300">{(parseFloat(t.precio_unit)||0).toLocaleString('es-UY')}</div>
+                            <div className="text-right text-slate-600 dark:text-slate-300">{pagado.toLocaleString('es-UY')}</div>
+                            <div className={`text-right font-bold ${saldado?'text-emerald-600 dark:text-emerald-400':porPagar>0?'text-red-600 dark:text-red-400':'text-slate-500'}`}>{porPagar.toLocaleString('es-UY')}</div>
+                            <div className="text-center">
+                                <button onClick={()=>setCommentsTarget(t)} className="relative inline-flex items-center gap-1 px-2 py-1 rounded-full bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-600 dark:text-slate-300 text-[10px] font-bold">
+                                    💬 {cc>0&&<span className="bg-brand-600 text-white text-[9px] px-1 rounded-full min-w-[14px]">{cc}</span>}
+                                </button>
+                            </div>
+                            <div className="flex gap-1 justify-end">
+                                {saldado?<span className="bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-400 px-2 py-1 rounded-full text-[10px] font-bold">✓</span>
+                                :<button onClick={()=>setPayTarget(t)} className="border border-slate-300 dark:border-slate-600 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 px-2 py-1 rounded-full text-[10px] font-bold">Pagar</button>}
+                                <button onClick={()=>delTreatment(t)} className="text-slate-400 hover:text-red-500 p-1"><Trash2 size={12}/></button>
+                            </div>
+                        </div>
 
-        {budgets.length===0&&!creating&&<Card className="p-8 text-center"><CreditCard size={32} className="mx-auto text-slate-300 dark:text-slate-600 mb-2"/><p className="text-slate-400 text-xs">Sin presupuestos</p></Card>}
+                        {/* Mobile vertical */}
+                        <div className="md:hidden">
+                            <div className="flex items-center gap-2 mb-2">
+                                <select value={t.estado} onChange={e=>onChangeEstado(t,e.target.value)} className={`text-[10px] px-2 py-1 rounded-full font-bold border-0 ${st.color}`}>
+                                    {Object.entries(TREATMENT_STATES).map(([k,v])=><option key={k} value={k}>{v.icon} {v.label}</option>)}
+                                </select>
+                                <p className="font-bold text-xs flex-1 truncate">{t.descripcion}</p>
+                            </div>
+                            <div className="grid grid-cols-4 gap-1 text-[10px] mb-2">
+                                <div className="text-center"><p className="text-slate-400 text-[9px]">Cant.</p><p>{t.cantidad}</p></div>
+                                <div className="text-center"><p className="text-slate-400 text-[9px]">Precio</p><p>${(parseFloat(t.precio_unit)||0).toLocaleString('es-UY')}</p></div>
+                                <div className="text-center"><p className="text-slate-400 text-[9px]">Pagado</p><p>${pagado.toLocaleString('es-UY')}</p></div>
+                                <div className="text-center"><p className="text-slate-400 text-[9px]">Saldo</p><p className={`font-bold ${saldado?'text-emerald-600 dark:text-emerald-400':'text-red-600 dark:text-red-400'}`}>${porPagar.toLocaleString('es-UY')}</p></div>
+                            </div>
+                            <div className="flex gap-2 items-center">
+                                <button onClick={()=>setCommentsTarget(t)} className="flex-1 inline-flex items-center justify-center gap-1 px-2 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 text-[10px] font-bold">
+                                    💬 {cc} comentario{cc!==1?'s':''}
+                                </button>
+                                {saldado?<span className="bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-400 px-3 py-1.5 rounded-lg text-[10px] font-bold">✓ Saldado</span>
+                                :<button onClick={()=>setPayTarget(t)} className="border border-slate-300 dark:border-slate-600 px-3 py-1.5 rounded-lg text-[10px] font-bold">Pagar</button>}
+                                <button onClick={()=>delTreatment(t)} className="text-slate-400 hover:text-red-500 p-1.5"><Trash2 size={12}/></button>
+                            </div>
+                        </div>
+                    </div>
+                })}
+                {filtered.length===0&&<div className="p-6 text-center text-slate-300 dark:text-slate-600 text-xs">{filter==='todos'?'Sin tratamientos. Agregá uno abajo.':'Sin tratamientos en este estado'}</div>}
+            </div>
+
+            {/* Form de nuevo tratamiento */}
+            <div className="p-3 border-t border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/30 grid grid-cols-12 gap-2">
+                <Input className="col-span-12 sm:col-span-6 text-xs py-1.5" placeholder="Descripción del tratamiento" value={newItem.descripcion} onChange={e=>setNewItem({...newItem,descripcion:e.target.value})}/>
+                <Input type="number" className="col-span-4 sm:col-span-2 text-xs py-1.5" placeholder="Cant" value={newItem.cantidad} onChange={e=>setNewItem({...newItem,cantidad:e.target.value})}/>
+                <Input type="number" className="col-span-8 sm:col-span-3 text-xs py-1.5" placeholder="Precio unit." value={newItem.precio_unit} onChange={e=>setNewItem({...newItem,precio_unit:e.target.value})}/>
+                <Btn onClick={addTreatment} className="col-span-12 sm:col-span-1 text-xs py-1.5">+</Btn>
+            </div>
+        </Card>
+
+        {payTarget&&<PayModal item={payTarget} onConfirm={amt=>confirmPay(payTarget,amt)} onClose={()=>setPayTarget(null)}/>}
+        {commentsTarget&&<CommentsModal treatment={commentsTarget} user={user} onClose={()=>setCommentsTarget(null)} onChanged={()=>load({silent:true})}/>}
     </div>
 };
 
@@ -1902,7 +1824,7 @@ const Admin=({user,online,onUserUpdated})=>{
             <Card className="p-6 text-center"><Upload size={32} className="mx-auto text-emerald-600 dark:text-emerald-400 mb-2"/><h4 className="font-bold mb-2">Importar</h4><input type="file" ref={fileRef} accept=".json" className="hidden" onChange={async e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=async ev=>{if(await S.import(ev.target.result)){toast.ok('Importado, recargando...');setTimeout(()=>window.location.reload(),1500)}};r.readAsText(f)}}/><Btn variant="success" onClick={()=>fileRef.current.click()} className="w-full py-3 text-sm">Cargar</Btn></Card>
         </div>}
 
-        {tab==='info'&&<div className="bg-gradient-to-br from-slate-800 to-indigo-900 p-6 rounded-xl text-white text-center"><Cloud size={40} className="mx-auto mb-2"/><h4 className="text-lg font-bold mb-2">Sistema en la Nube</h4><p className="text-white/80 text-sm mb-3">Supabase Auth + Database</p><div className={`inline-flex items-center gap-2 px-4 py-2 rounded-full ${online?'bg-emerald-500':'bg-red-500'}`}>{online?<><Wifi size={16}/>Conectado</>:<><WifiOff size={16}/>Offline</>}</div><p className="text-white/60 text-[10px] mt-3">v3.5 • Presupuestos con items + Layout sidebar</p></div>}
+        {tab==='info'&&<div className="bg-gradient-to-br from-slate-800 to-indigo-900 p-6 rounded-xl text-white text-center"><Cloud size={40} className="mx-auto mb-2"/><h4 className="text-lg font-bold mb-2">Sistema en la Nube</h4><p className="text-white/80 text-sm mb-3">Supabase Auth + Database</p><div className={`inline-flex items-center gap-2 px-4 py-2 rounded-full ${online?'bg-emerald-500':'bg-red-500'}`}>{online?<><Wifi size={16}/>Conectado</>:<><WifiOff size={16}/>Offline</>}</div><p className="text-white/60 text-[10px] mt-3">v3.6 • Tratamientos planos + Comentarios</p></div>}
     </div>
 };
 
@@ -1976,7 +1898,7 @@ const App=()=>{
             {tab==='admin'&&<Admin user={user} online={online} onUserUpdated={u=>setUser({...user,...u})}/>}
         </main>
 
-        <footer className="p-2 text-center text-[10px] text-slate-400 no-print safe-bottom">Arte Dental © 2025 • v3.5 • {online?'🟢':'🔴'}</footer>
+        <footer className="p-2 text-center text-[10px] text-slate-400 no-print safe-bottom">Arte Dental © 2025 • v3.6 • {online?'🟢':'🔴'}</footer>
     </div>
 };
 
