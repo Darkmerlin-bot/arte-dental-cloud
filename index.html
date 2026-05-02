@@ -1352,27 +1352,53 @@ const TREATMENT_STATES={
 // Dropdown custom para estado (evita problemas de contraste de <select> nativo)
 const StateDropdown=({value,onChange})=>{
     const[open,setOpen]=useState(false);
-    const ref=useRef(null);
+    const[pos,setPos]=useState(null);
+    const btnRef=useRef(null);
+    const menuRef=useRef(null);
+
     useEffect(()=>{
         if(!open)return;
-        const onDoc=e=>{if(ref.current&&!ref.current.contains(e.target))setOpen(false)};
+        const onDoc=e=>{
+            if(btnRef.current?.contains(e.target))return;
+            if(menuRef.current?.contains(e.target))return;
+            setOpen(false);
+        };
+        const onScroll=()=>setOpen(false);
         document.addEventListener('mousedown',onDoc);
-        return()=>document.removeEventListener('mousedown',onDoc);
+        window.addEventListener('scroll',onScroll,true);
+        window.addEventListener('resize',onScroll);
+        return()=>{document.removeEventListener('mousedown',onDoc);window.removeEventListener('scroll',onScroll,true);window.removeEventListener('resize',onScroll)};
     },[open]);
+
+    const toggle=()=>{
+        if(open){setOpen(false);return}
+        const r=btnRef.current?.getBoundingClientRect();
+        if(!r)return;
+        const menuW=176; // w-44
+        const menuH=240; // aprox 5 items
+        // Calcular si abrir hacia abajo o arriba según espacio disponible
+        const spaceBelow=window.innerHeight-r.bottom;
+        const above=spaceBelow<menuH&&r.top>menuH;
+        const top=above?r.top-menuH-4:r.bottom+4;
+        const left=Math.min(r.left,window.innerWidth-menuW-8);
+        setPos({top,left,width:Math.max(r.width,menuW)});
+        setOpen(true);
+    };
+
     const cur=TREATMENT_STATES[value]||TREATMENT_STATES.creado;
-    return<div className="relative" ref={ref}>
-        <button type="button" onClick={()=>setOpen(!open)} className={`w-full flex items-center justify-between gap-1 text-[10px] px-2 py-1 rounded-full font-bold ${cur.color}`}>
+    return<>
+        <button ref={btnRef} type="button" onClick={toggle} className={`w-full flex items-center justify-between gap-1 text-[10px] px-2 py-1 rounded-full font-bold ${cur.color}`}>
             <span className="truncate">{cur.icon} {cur.label}</span>
             <span className="text-[8px] opacity-60">▼</span>
         </button>
-        {open&&<div className="absolute z-30 mt-1 left-0 w-44 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-xl overflow-hidden">
+        {open&&pos&&<Portal><div ref={menuRef} className="fixed z-[300] bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-xl overflow-hidden" style={{top:pos.top,left:pos.left,width:pos.width}}>
             {Object.entries(TREATMENT_STATES).map(([k,v])=><button key={k} type="button" onClick={()=>{onChange(k);setOpen(false)}} className={`w-full text-left px-3 py-2 text-xs font-bold flex items-center gap-2 hover:bg-slate-100 dark:hover:bg-slate-700 ${k===value?'bg-slate-50 dark:bg-slate-700/50':''}`}>
                 <span className="w-2 h-2 rounded-full shrink-0" style={{background:v.dot}}/>
                 <span className="text-slate-700 dark:text-slate-200">{v.icon} {v.label}</span>
                 {k===value&&<CheckCircle2 size={12} className="ml-auto text-emerald-500"/>}
             </button>)}
-        </div>}
-    </div>;
+        </div></Portal>}
+    </>;
 };
 
 // Modal pequeño para confirmar pago
