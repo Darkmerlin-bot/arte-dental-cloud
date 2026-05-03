@@ -174,6 +174,14 @@ const S={
     getTreatmentComments:tid=>DB.getAll('treatment_comments',{eq:{treatment_id:tid},orderBy:'created_at',asc:true}),
     addTreatmentComment:c=>DB.insert('treatment_comments',c),
     delTreatmentComment:id=>DB.delete('treatment_comments',id),
+    // Configuración de clínica (singleton id=1)
+    getClinicConfig:async()=>{const r=await DB.getAll('clinic_config',{eq:{id:1}});return r[0]||null},
+    saveClinicConfig:async cfg=>{
+        const exists=await DB.getAll('clinic_config',{eq:{id:1}});
+        const data={...cfg,id:1,updated_at:new Date().toISOString()};
+        if(exists.length){return DB.update('clinic_config',1,data)}
+        return DB.insert('clinic_config',data);
+    },
     // Mantener legacy de budgets por compatibilidad pero ya no se usan en UI nueva
     getBudgets:pid=>DB.getAll('budgets',{notDeleted:true,eq:{paciente_id:pid},orderBy:'id',asc:false}),
     getBudgetItems:bid=>DB.getAll('budget_items',{eq:{budget_id:bid},orderBy:'orden'})
@@ -763,6 +771,7 @@ const PatientHub=({user,patientId,onBack})=>{
     const[apps,setApps]=useState([]);
     const[users,setUsers]=useState([]);
     const[treatments,setTreatments]=useState([]);
+    const[clinic,setClinic]=useState(null);
     const[loading,setLoading]=useState(true);
 
     useEffect(()=>{loadAll()},[patientId]);
@@ -770,16 +779,17 @@ const PatientHub=({user,patientId,onBack})=>{
     const loadAll=async(opts={})=>{
         const silent=opts?.silent||!firstHubLoad.current;
         if(!silent)setLoading(true);
-        const[p,m,h,i,a,u,t]=await Promise.all([
+        const[p,m,h,i,a,u,t,c]=await Promise.all([
             S.getPatient(patientId),
             S.getMed(patientId),
             S.getHist(patientId),
             S.getImgs(patientId),
             S.getAppsByPatient(patientId),
             S.getUsers(),
-            S.getTreatments(patientId)
+            S.getTreatments(patientId),
+            S.getClinicConfig()
         ]);
-        setPatient(p);setMedRec(m);setHist(h);setImgs(i);setApps(a);setUsers(u.filter(x=>x.role===Role.ODONTOLOGO));setTreatments(t);
+        setPatient(p);setMedRec(m);setHist(h);setImgs(i);setApps(a);setUsers(u.filter(x=>x.role===Role.ODONTOLOGO));setTreatments(t);setClinic(c);
         if(firstHubLoad.current){setLoading(false);firstHubLoad.current=false}
     };
 
@@ -867,9 +877,9 @@ const PatientHub=({user,patientId,onBack})=>{
                 {tab==='resumen'&&<PatientResumen patient={patient} medRec={medRec} hist={hist} apps={apps} treatments={treatments} saldo={saldo} onGoTab={setTab}/>}
                 {tab==='ficha'&&<PatientFicha patient={patient} medRec={medRec} user={user} onSaved={loadAll}/>}
                 {tab==='odo'&&<PatientOdo patient={patient} medRec={medRec} user={user} hist={hist} users={users} onSaved={loadAll} onHistReload={loadAll}/>}
-                {tab==='historia'&&<PatientHistoria patient={patient} hist={hist} users={users} user={user} onReload={loadAll}/>}
+                {tab==='historia'&&<PatientHistoria patient={patient} hist={hist} users={users} user={user} clinic={clinic} onReload={loadAll}/>}
                 {tab==='presup'&&<PatientTreatments patient={patient} user={user} onReload={loadAll}/>}
-                {tab==='fotos'&&<PatientFotos patient={patient} imgs={imgs} onReload={loadAll}/>}
+                {tab==='fotos'&&<PatientFotos patient={patient} imgs={imgs} clinic={clinic} onReload={loadAll}/>}
                 {tab==='citas'&&<PatientCitas patient={patient} apps={apps} onReload={loadAll}/>}
                 {tab==='consent'&&<PatientConsents patient={patient} user={user}/>}
             </div>
@@ -974,9 +984,210 @@ const PatientOdo=({patient,medRec,user,hist,users,onSaved,onHistReload})=>{
     return<Odontogram value={rec.odontograma} onChange={o=>setRec({...rec,odontograma:o})} onSave={save} patient={patient} hist={hist} users={users} user={user} onHistReload={onHistReload}/>
 };
 
-const PatientHistoria=({patient,hist,users,user,onReload})=>{
+// Helpers para parsear fechas (puede venir en formato dd/mm/yyyy o ISO)
+const parseFechaUY=s=>{
+    if(!s)return null;
+    if(/^\d{4}-\d{2}-\d{2}/.test(s))return new Date(s);
+    const m=/^(\d{1,2})\/(\d{1,2})\/(\d{4})/.exec(s);
+    if(m)return new Date(parseInt(m[3]),parseInt(m[2])-1,parseInt(m[1]));
+    return new Date(s);
+};
+const extractMonto=motivo=>{const m=/\$\s?(\d+(?:[.,]\d+)?)/.exec(motivo||'');return m?parseFloat(m[1].replace(',','.')):0};
+
+// Construye el HTML del header de clínica para documentos impresos
+const buildClinicHeader=(clinic)=>{
+    const c=clinic||{};
+    const nombre=c.nombre||'Arte Dental';
+    const subtitulo=c.subtitulo||'Consultorio Odontológico';
+    const direccion=c.direccion||'';
+    const ciudad=c.ciudad||'Montevideo';
+    const pais=c.pais||'Uruguay';
+    const telefono=c.telefono||'';
+    const email=c.email||'';
+    const rut=c.rut||'';
+    const color=c.color_primario||'#4f46e5';
+    const logo=c.logo_data||'';
+    
+    const ubicacion=[direccion,ciudad,pais].filter(Boolean).join(', ');
+    const contacto=[telefono,email].filter(Boolean).join(' · ');
+    
+    return{
+        color,
+        html:`<div class="header" style="border-bottom:3px solid ${color};padding-bottom:12px;margin-bottom:18px;display:flex;align-items:center;gap:14px">
+${logo?`<img src="${logo}" style="width:56px;height:56px;object-fit:contain;flex-shrink:0"/>`:''}
+<div style="flex:1">
+<h1 style="font-size:18px;font-weight:bold;color:${color};margin:0">${nombre}</h1>
+${subtitulo?`<p style="font-size:10px;color:#666;margin:2px 0 0">${subtitulo}${ubicacion?' — '+ubicacion:''}</p>`:''}
+${contacto?`<p style="font-size:10px;color:#666;margin:2px 0 0">${contacto}</p>`:''}
+${rut?`<p style="font-size:10px;color:#666;margin:2px 0 0">RUT: ${rut}</p>`:''}
+</div>
+</div>`
+    };
+};
+
+const PrintHistoryModal=({patient,hist,users,clinic,onClose})=>{
+    const today=new Date();
+    const yearAgo=new Date(today.getFullYear(),today.getMonth(),today.getDate()-365);
+    const fmtIso=d=>d.toISOString().slice(0,10);
+    const[from,setFrom]=useState(fmtIso(yearAgo));
+    const[to,setTo]=useState(fmtIso(today));
+    const[tipo,setTipo]=useState('TODO'); // TODO|EVOLUCION|PAGO|PRESUPUESTO|CITA|SISTEMA
+    const[odo,setOdo]=useState('TODOS');
+
+    const filtered=useMemo(()=>{
+        const fromD=new Date(from);const toD=new Date(to);toD.setHours(23,59,59);
+        return hist.filter(h=>{
+            const d=parseFechaUY(h.fecha);if(!d)return false;
+            if(d<fromD||d>toD)return false;
+            if(tipo!=='TODO'&&h.tipo!==tipo)return false;
+            if(odo!=='TODOS'&&h.odontologo!==odo)return false;
+            return true;
+        }).sort((a,b)=>parseFechaUY(a.fecha)-parseFechaUY(b.fecha));
+    },[hist,from,to,tipo,odo]);
+
+    const totalPagos=useMemo(()=>filtered.filter(h=>h.tipo==='PAGO').reduce((s,h)=>s+extractMonto(h.motivo),0),[filtered]);
+    const totalPresup=useMemo(()=>filtered.filter(h=>h.tipo==='PRESUPUESTO').reduce((s,h)=>s+extractMonto(h.motivo),0),[filtered]);
+
+    const print=()=>{
+        const w=window.open('','_blank','width=900,height=700');
+        if(!w)return toast.warn('Permita pop-ups para imprimir');
+        const tipoLabel={TODO:'Todos',EVOLUCION:'Tratamientos',PAGO:'Pagos',PRESUPUESTO:'Presupuestos',CITA:'Citas',SISTEMA:'Sistema'}[tipo]||'Todos';
+        const edad=calcEdad(patient.fecha_nacimiento);
+        const fechaFmt=d=>{const dt=parseFechaUY(d);return dt?dt.toLocaleDateString('es-UY'):d};
+        const header=buildClinicHeader(clinic);
+        const html=`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Historial - ${patient.nombre}</title>
+<style>
+@page{size:A4;margin:1.5cm}
+body{font-family:Arial,Helvetica,sans-serif;font-size:11px;color:#222;line-height:1.4}
+.meta{margin:14px 0;background:#f5f5f5;padding:10px;border-radius:6px;font-size:10px}
+.meta div{margin-bottom:3px}
+.meta .lbl{font-weight:bold;color:#555;display:inline-block;width:90px}
+h2{font-size:13px;color:#1e293b;border-bottom:1px solid #cbd5e1;padding-bottom:4px;margin:18px 0 8px}
+table{width:100%;border-collapse:collapse;margin-top:6px}
+th{background:#1e293b;color:#fff;padding:6px 8px;text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:0.3px}
+td{padding:5px 8px;border-bottom:1px solid #e2e8f0;font-size:10px;vertical-align:top}
+tr.PAGO td{background:#ecfdf5}
+tr.PRESUPUESTO td{background:#eef2ff}
+tr.CITA td{background:#fef3c7}
+tr.SISTEMA td{background:#f1f5f9;font-style:italic;color:#64748b}
+.amount{text-align:right;font-weight:bold;color:#059669}
+.totals{margin-top:14px;background:#f8fafc;padding:12px;border-radius:6px;border-left:4px solid ${header.color}}
+.totals .row{display:flex;justify-content:space-between;padding:3px 0;font-size:11px}
+.totals .total{font-weight:bold;font-size:13px;border-top:2px solid #1e293b;margin-top:6px;padding-top:6px}
+.footer{margin-top:30px;display:flex;justify-content:space-between;font-size:10px;color:#666}
+.sign{border-top:1px solid #999;width:200px;text-align:center;padding-top:5px;margin-top:50px}
+.empty{text-align:center;padding:30px;color:#999;font-style:italic}
+.tipo-tag{display:inline-block;padding:1px 6px;border-radius:8px;font-size:8px;font-weight:bold;text-transform:uppercase}
+.tipo-EVOLUCION{background:#dbeafe;color:#1e40af}
+.tipo-PAGO{background:#d1fae5;color:#065f46}
+.tipo-PRESUPUESTO{background:#e0e7ff;color:#3730a3}
+.tipo-CITA{background:#fef3c7;color:#92400e}
+.tipo-SISTEMA{background:#e2e8f0;color:#475569}
+@media print{button{display:none}}
+.toolbar{position:fixed;top:0;left:0;right:0;background:#1e293b;padding:10px;z-index:9999;display:flex;justify-content:center;gap:10px}
+.toolbar button{padding:8px 18px;border:0;border-radius:6px;font-weight:bold;cursor:pointer;font-size:11px}
+.toolbar .print-btn{background:${header.color};color:#fff}
+.toolbar .close-btn{background:#fff;color:#1e293b}
+@media print{.toolbar{display:none}body{padding:0}}
+.content{margin-top:50px}
+@media print{.content{margin-top:0}}
+</style></head><body>
+<div class="toolbar">
+<button class="print-btn" onclick="window.print()">🖨️ Imprimir / Guardar como PDF</button>
+<button class="close-btn" onclick="window.close()">✕ Cerrar</button>
+</div>
+<div class="content">
+${header.html}
+<div class="meta">
+<div><span class="lbl">Paciente:</span> ${patient.nombre||''}</div>
+<div><span class="lbl">CI:</span> ${formatCI(patient.ci)||'—'}${edad!==null?` &nbsp;·&nbsp; <span class="lbl" style="width:auto">Edad:</span> ${edad} años`:''}</div>
+${patient.telefono?`<div><span class="lbl">Teléfono:</span> ${patient.telefono}</div>`:''}
+${patient.direccion?`<div><span class="lbl">Domicilio:</span> ${patient.direccion}</div>`:''}
+<div style="margin-top:6px;border-top:1px dashed #cbd5e1;padding-top:6px">
+<div><span class="lbl">Período:</span> ${new Date(from).toLocaleDateString('es-UY')} al ${new Date(to).toLocaleDateString('es-UY')}</div>
+<div><span class="lbl">Filtro:</span> ${tipoLabel}${odo!=='TODOS'?` &nbsp;·&nbsp; Dr. ${odo}`:''}</div>
+<div><span class="lbl">Emisión:</span> ${today.toLocaleDateString('es-UY')} ${today.toLocaleTimeString('es-UY',{hour:'2-digit',minute:'2-digit'})}</div>
+</div>
+</div>
+
+<h2>Historial de movimientos (${filtered.length})</h2>
+${filtered.length===0?'<div class="empty">No hay movimientos en el período seleccionado</div>':`
+<table>
+<thead><tr><th style="width:80px">Fecha</th><th style="width:80px">Tipo</th><th style="width:100px">Odontólogo</th><th>Detalle</th></tr></thead>
+<tbody>
+${filtered.map(h=>`<tr class="${h.tipo}"><td>${fechaFmt(h.fecha)}</td><td><span class="tipo-tag tipo-${h.tipo}">${h.tipo}</span></td><td>${h.odontologo||'—'}</td><td>${(h.motivo||'').replace(/</g,'&lt;')}</td></tr>`).join('')}
+</tbody>
+</table>`}
+
+${(totalPagos>0||totalPresup>0)?`
+<div class="totals">
+${totalPresup>0?`<div class="row"><span>Total presupuestado:</span><span><strong>$ ${totalPresup.toLocaleString('es-UY')}</strong></span></div>`:''}
+${totalPagos>0?`<div class="row"><span>Total cobrado:</span><span style="color:#059669"><strong>$ ${totalPagos.toLocaleString('es-UY')}</strong></span></div>`:''}
+${(totalPresup>0&&totalPagos>0)?`<div class="row total"><span>Saldo del período:</span><span style="color:${totalPresup-totalPagos>0?'#dc2626':'#059669'}"><strong>$ ${(totalPresup-totalPagos).toLocaleString('es-UY')}</strong></span></div>`:''}
+</div>`:''}
+
+<div class="footer">
+<div class="sign">Firma del Profesional</div>
+<div class="sign">Firma del Paciente</div>
+</div>
+</div>
+</body></html>`;
+        w.document.write(html);
+        w.document.close();
+    };
+
+    return<Portal><div className="fixed inset-0 bg-black/60 z-[200] flex items-center justify-center p-2 sm:p-4" onClick={onClose}>
+        <div className="bg-white dark:bg-slate-800 w-full sm:max-w-md rounded-2xl flex flex-col animate-fade-in" style={{maxHeight:'calc(100vh - 1rem)'}} onClick={e=>e.stopPropagation()}>
+            <div className="flex justify-between items-center p-4 border-b border-slate-200 dark:border-slate-700 shrink-0">
+                <h3 className="font-bold text-base">🖨️ Imprimir historial</h3>
+                <button onClick={onClose} className="p-1"><X size={20} className="text-slate-400"/></button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-4 space-y-3 min-h-0">
+                <div>
+                    <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 mb-1 block">Desde</label>
+                    <Input type="date" value={from} onChange={e=>setFrom(e.target.value)}/>
+                </div>
+                <div>
+                    <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 mb-1 block">Hasta</label>
+                    <Input type="date" value={to} onChange={e=>setTo(e.target.value)}/>
+                </div>
+                <div>
+                    <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 mb-1 block">Tipo de movimiento</label>
+                    <Select value={tipo} onChange={e=>setTipo(e.target.value)}>
+                        <option value="TODO">Todos</option>
+                        <option value="EVOLUCION">Solo tratamientos / evoluciones</option>
+                        <option value="PAGO">Solo pagos</option>
+                        <option value="PRESUPUESTO">Solo presupuestos</option>
+                        <option value="CITA">Solo citas</option>
+                        <option value="SISTEMA">Solo eventos del sistema</option>
+                    </Select>
+                </div>
+                <div>
+                    <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 mb-1 block">Odontólogo</label>
+                    <Select value={odo} onChange={e=>setOdo(e.target.value)}>
+                        <option value="TODOS">Todos</option>
+                        {(users||[]).map(u=><option key={u.id} value={u.name}>Dr. {u.name}</option>)}
+                    </Select>
+                </div>
+                <div className="bg-slate-100 dark:bg-slate-900/50 rounded-lg p-3 text-xs">
+                    <p className="font-bold text-brand-600 dark:text-brand-400 mb-1">Vista previa:</p>
+                    <p className="text-slate-600 dark:text-slate-300">{filtered.length} movimiento{filtered.length!==1?'s':''} en el período</p>
+                    {totalPagos>0&&<p className="text-emerald-600 dark:text-emerald-400">Cobrado: ${totalPagos.toLocaleString('es-UY')}</p>}
+                    {totalPresup>0&&<p className="text-brand-600 dark:text-brand-400">Presupuestado: ${totalPresup.toLocaleString('es-UY')}</p>}
+                </div>
+            </div>
+            <div className="p-3 border-t border-slate-200 dark:border-slate-700 shrink-0 safe-bottom flex gap-2">
+                <Btn onClick={print} className="flex-1 py-2.5 text-sm" disabled={filtered.length===0}>🖨️ Generar</Btn>
+                <Btn variant="secondary" onClick={onClose} className="flex-1 py-2.5 text-sm">Cancelar</Btn>
+            </div>
+        </div>
+    </div></Portal>;
+};
+
+const PatientHistoria=({patient,hist,users,user,clinic,onReload})=>{
     const[subTab,setSubTab]=useState('todo');
     const[form,setForm]=useState({tto:'',dr:user.role===Role.ODONTOLOGO?user.name:''});
+    const[printOpen,setPrintOpen]=useState(false);
 
     const saveEvo=async()=>{if(!form.tto||!form.dr)return toast.warn('Complete campos');const r=await S.saveHist({paciente_id:patient.id,fecha:new Date().toLocaleDateString(),odontologo:form.dr,motivo:form.tto,tipo:'EVOLUCION',deleted:false});if(r){setForm({tto:'',dr:user.role===Role.ODONTOLOGO?user.name:form.dr});toast.ok('Evolución guardada');onReload()}};
 
@@ -1021,8 +1232,9 @@ const PatientHistoria=({patient,hist,users,user,onReload})=>{
 
         {/* Lista de movimientos */}
         <Card className="overflow-hidden">
-            <div className="p-3 border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/50 flex justify-between items-center">
-                <h3 className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">{SUB_TABS.find(t=>t.id===subTab)?.label} ({filtered.length})</h3>
+            <div className="p-3 border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/50 flex justify-between items-center gap-2">
+                <h3 className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase truncate">{SUB_TABS.find(t=>t.id===subTab)?.label} ({filtered.length})</h3>
+                <Btn variant="secondary" onClick={()=>setPrintOpen(true)} className="text-[10px] px-3 py-1.5 shrink-0">🖨️ Imprimir</Btn>
             </div>
             <div className="divide-y divide-slate-200 dark:divide-slate-700 max-h-[60vh] overflow-auto">
                 {filtered.map(h=><div key={h.id} className={`p-3 border-l-4 ${h.tipo==='PAGO'?'border-emerald-500 bg-emerald-50 dark:bg-emerald-900/20':h.tipo==='PRESUPUESTO'?'border-indigo-500 bg-indigo-50 dark:bg-indigo-900/20':h.tipo==='CITA'?'border-amber-500 bg-amber-50 dark:bg-amber-900/20':h.tipo==='SISTEMA'?'border-slate-800 bg-slate-100 dark:bg-slate-900':'border-brand-500'}`}>
@@ -1032,16 +1244,98 @@ const PatientHistoria=({patient,hist,users,user,onReload})=>{
                 {filtered.length===0&&<div className="p-8 text-center text-slate-300 dark:text-slate-600 text-xs">Sin registros</div>}
             </div>
         </Card>
+        {printOpen&&<PrintHistoryModal patient={patient} hist={hist} users={users} clinic={clinic} onClose={()=>setPrintOpen(false)}/>}
     </div>
 };
 
-const PatientFotos=({patient,imgs,onReload})=>{
-    const[uploading,setUploading]=useState(false);const[fullImg,setFullImg]=useState(null);
+const PatientFotos=({patient,imgs,clinic,onReload})=>{
+    const[uploading,setUploading]=useState(false);
+    const[fullImg,setFullImg]=useState(null);
+    const[selectMode,setSelectMode]=useState(false);
+    const[selected,setSelected]=useState(new Set());
+
     const addPhoto=async e=>{const files=Array.from(e.target.files);if(!files.length)return;setUploading(true);for(const f of files){const d=await compress(f);await S.saveImg({paciente_id:patient.id,data:d,date:new Date().toLocaleDateString(),deleted:false})}setUploading(false);onReload()};
+
+    const toggleSel=id=>setSelected(s=>{const n=new Set(s);n.has(id)?n.delete(id):n.add(id);return n});
+    const selectAll=()=>setSelected(new Set(imgs.map(i=>i.id)));
+    const clearSel=()=>setSelected(new Set());
+    const exitSelect=()=>{setSelectMode(false);setSelected(new Set())};
+
+    const printSelected=()=>{
+        const fotos=imgs.filter(i=>selected.has(i.id));
+        if(!fotos.length)return toast.warn('Seleccione al menos una foto');
+        const w=window.open('','_blank','width=900,height=700');
+        if(!w)return toast.warn('Permita pop-ups para imprimir');
+        const edad=calcEdad(patient.fecha_nacimiento);
+        const today=new Date();
+        const header=buildClinicHeader(clinic);
+        const html=`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Fotos - ${patient.nombre}</title>
+<style>
+@page{size:A4;margin:1.5cm}
+body{font-family:Arial,Helvetica,sans-serif;font-size:11px;color:#222}
+.meta{margin:14px 0;background:#f5f5f5;padding:10px;border-radius:6px;font-size:10px}
+.meta div{margin-bottom:3px}
+.meta .lbl{font-weight:bold;color:#555;display:inline-block;width:90px}
+h2{font-size:13px;color:#1e293b;border-bottom:1px solid #cbd5e1;padding-bottom:4px;margin:18px 0 10px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.foto{border:1px solid #cbd5e1;border-radius:6px;overflow:hidden;page-break-inside:avoid;margin-bottom:8px}
+.foto img{width:100%;height:auto;display:block;max-height:8cm;object-fit:contain;background:#f8fafc}
+.foto .cap{padding:6px 8px;font-size:9px;background:#f5f5f5;border-top:1px solid #e2e8f0}
+.foto .cap .num{font-weight:bold;color:${header.color}}
+.toolbar{position:fixed;top:0;left:0;right:0;background:#1e293b;padding:10px;z-index:9999;display:flex;justify-content:center;gap:10px}
+.toolbar button{padding:8px 18px;border:0;border-radius:6px;font-weight:bold;cursor:pointer;font-size:11px}
+.toolbar .print-btn{background:${header.color};color:#fff}
+.toolbar .close-btn{background:#fff;color:#1e293b}
+.content{margin-top:50px}
+@media print{.toolbar{display:none}.content{margin-top:0}body{padding:0}}
+</style></head><body>
+<div class="toolbar">
+<button class="print-btn" onclick="window.print()">🖨️ Imprimir / Guardar PDF</button>
+<button class="close-btn" onclick="window.close()">✕ Cerrar</button>
+</div>
+<div class="content">
+${header.html}
+<div class="meta">
+<div><span class="lbl">Paciente:</span> ${patient.nombre||''}</div>
+<div><span class="lbl">CI:</span> ${formatCI(patient.ci)||'—'}${edad!==null?` &nbsp;·&nbsp; <span class="lbl" style="width:auto">Edad:</span> ${edad} años`:''}</div>
+<div><span class="lbl">Emisión:</span> ${today.toLocaleDateString('es-UY')}</div>
+<div><span class="lbl">Total fotos:</span> ${fotos.length}</div>
+</div>
+<h2>Galería fotográfica</h2>
+<div class="grid">
+${fotos.map((f,idx)=>`<div class="foto"><img src="${f.data}"/><div class="cap"><span class="num">Foto ${idx+1}</span> · ${f.date||'—'}</div></div>`).join('')}
+</div>
+</div>
+</body></html>`;
+        w.document.write(html);
+        w.document.close();
+    };
+
     return<Card className="p-3">
+        {/* Toolbar */}
+        <div className="flex items-center gap-2 mb-3 flex-wrap">
+            {!selectMode?<>
+                <Btn variant="secondary" onClick={()=>setSelectMode(true)} disabled={!imgs.length} className="text-xs px-3 py-1.5">🖨️ Imprimir fotos</Btn>
+                <p className="text-[10px] text-slate-400">{imgs.length} foto{imgs.length!==1?'s':''}</p>
+            </>:<>
+                <span className="text-[11px] font-bold text-brand-600 dark:text-brand-400">{selected.size} seleccionada{selected.size!==1?'s':''}</span>
+                <button onClick={selectAll} className="text-[10px] text-brand-600 dark:text-brand-400 underline">Todas</button>
+                <button onClick={clearSel} className="text-[10px] text-slate-500 underline">Ninguna</button>
+                <div className="ml-auto flex gap-1">
+                    <Btn onClick={printSelected} disabled={!selected.size} className="text-xs px-3 py-1.5">🖨️ Imprimir ({selected.size})</Btn>
+                    <Btn variant="secondary" onClick={exitSelect} className="text-xs px-3 py-1.5">Cancelar</Btn>
+                </div>
+            </>}
+        </div>
+
         <div className="grid grid-cols-3 gap-2">
-            <label className="aspect-square border-2 border-dashed border-slate-300 dark:border-slate-600 rounded-lg flex flex-col items-center justify-center cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700/30">{uploading?<RefreshCw className="animate-spin" size={20}/>:<><Upload size={20} className="text-slate-400"/><span className="text-[10px] text-slate-400">Subir</span></>}<input type="file" multiple accept="image/*" onChange={addPhoto} className="hidden" disabled={uploading}/></label>
-            {imgs.map(i=><div key={i.id} className="relative aspect-square rounded-lg overflow-hidden border border-slate-200 dark:border-slate-700"><img src={i.data} className="w-full h-full object-cover" onClick={()=>setFullImg(i.data)}/><button onClick={async()=>{if(confirm('¿Borrar?')){await S.delImg(i.id);onReload()}}} className="absolute top-1 right-1 bg-red-500 text-white p-0.5 rounded text-[10px]">×</button></div>)}
+            {!selectMode&&<label className="aspect-square border-2 border-dashed border-slate-300 dark:border-slate-600 rounded-lg flex flex-col items-center justify-center cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700/30">{uploading?<RefreshCw className="animate-spin" size={20}/>:<><Upload size={20} className="text-slate-400"/><span className="text-[10px] text-slate-400">Subir</span></>}<input type="file" multiple accept="image/*" onChange={addPhoto} className="hidden" disabled={uploading}/></label>}
+            {imgs.map(i=>{const isSel=selected.has(i.id);return<div key={i.id} className={`relative aspect-square rounded-lg overflow-hidden border-2 ${isSel?'border-brand-500 ring-2 ring-brand-300':'border-slate-200 dark:border-slate-700'} ${selectMode?'cursor-pointer':''}`} onClick={selectMode?()=>toggleSel(i.id):undefined}>
+                <img src={i.data} className="w-full h-full object-cover" onClick={selectMode?undefined:e=>{e.stopPropagation();setFullImg(i.data)}}/>
+                {selectMode&&<div className={`absolute top-1 left-1 w-6 h-6 rounded-full border-2 flex items-center justify-center text-xs font-bold ${isSel?'bg-brand-600 border-brand-600 text-white':'bg-white/80 border-white'}`}>{isSel?'✓':''}</div>}
+                {!selectMode&&<button onClick={async e=>{e.stopPropagation();if(confirm('¿Borrar?')){await S.delImg(i.id);onReload()}}} className="absolute top-1 right-1 bg-red-500 text-white p-0.5 rounded text-[10px]">×</button>}
+                {i.date&&<div className="absolute bottom-0 inset-x-0 bg-black/60 text-white text-[9px] px-1.5 py-0.5">{i.date}</div>}
+            </div>})}
         </div>
         {imgs.length===0&&<p className="text-center text-slate-400 text-xs mt-3">Sin fotos</p>}
         {fullImg&&<Modal src={fullImg} onClose={()=>setFullImg(null)}/>}
@@ -1979,9 +2273,13 @@ const Admin=({user,online,onUserUpdated})=>{
     const[editId,setEditId]=useState(null);const[saving,setSaving]=useState(false);
     const[profile,setProfile]=useState({name:user.name||'',registro_msp:user.registro_msp||''});
     const[profileSaving,setProfileSaving]=useState(false);
+    const[clinic,setClinic]=useState(null);
+    const[clinicSaving,setClinicSaving]=useState(false);
     const fileRef=useRef();
+    const logoRef=useRef();
 
     useEffect(()=>{if(tab==='users')S.getUsers().then(setUsers)},[tab]);
+    useEffect(()=>{if(tab==='clinic'&&!clinic)S.getClinicConfig().then(c=>setClinic(c||{nombre:'Arte Dental',subtitulo:'Consultorio Odontológico',ciudad:'Montevideo',pais:'Uruguay'}))},[tab]);
 
     const saveUser=async()=>{
         setSaving(true);
@@ -2006,12 +2304,27 @@ const Admin=({user,online,onUserUpdated})=>{
         if(r){toast.ok('Perfil actualizado');if(onUserUpdated)onUserUpdated(r)}
     };
 
+    const saveClinic=async()=>{
+        if(!clinic.nombre)return toast.warn('Indique el nombre de la clínica');
+        setClinicSaving(true);
+        const r=await S.saveClinicConfig(clinic);
+        setClinicSaving(false);
+        if(r)toast.ok('Configuración guardada');
+    };
+    const onLogoFile=async(e)=>{
+        const f=e.target.files?.[0];if(!f)return;
+        if(f.size>500*1024)return toast.warn('Logo demasiado grande (max 500KB)');
+        const d=await compress(f,400);
+        setClinic(c=>({...c,logo_data:d}));
+    };
+
     const tabBtn=(id,label,color)=><button onClick={()=>setTab(id)} className={`px-4 py-2 rounded-lg text-xs font-bold whitespace-nowrap ${tab===id?`${color} text-white`:'bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400'}`}>{label}</button>;
 
     return<div className="space-y-4 animate-fade-in">
         <div className="flex gap-2 overflow-x-auto pb-2">
             {isAdmin&&tabBtn('users','Usuarios','bg-brand-600')}
             {tabBtn('profile','Mi Perfil','bg-purple-600')}
+            {isAdmin&&tabBtn('clinic','Clínica','bg-pink-600')}
             {isAdmin&&tabBtn('templates','Plantillas','bg-amber-600')}
             {tabBtn('backup','Backup','bg-emerald-600')}
             {tabBtn('info','Sistema','bg-indigo-600')}
@@ -2055,12 +2368,106 @@ const Admin=({user,online,onUserUpdated})=>{
 
         {tab==='templates'&&isAdmin&&<TemplatesPanel/>}
 
+        {tab==='clinic'&&isAdmin&&<div className="space-y-4">
+            {!clinic?<Card className="p-8 text-center"><RefreshCw className="animate-spin mx-auto" size={20}/></Card>
+            :<>
+                <Card className="p-4">
+                    <SectionTitle icon={Settings} color="text-pink-600 dark:text-pink-400">Datos de la clínica</SectionTitle>
+                    <p className="text-[10px] text-slate-400 mb-3">Aparecerán en los documentos impresos: historial, recibos, galerías de fotos.</p>
+                    <div className="space-y-3">
+                        {/* Logo */}
+                        <div>
+                            <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 mb-1 block">Logo (opcional)</label>
+                            <div className="flex items-center gap-3">
+                                {clinic.logo_data?<img src={clinic.logo_data} className="w-16 h-16 object-contain border border-slate-200 dark:border-slate-700 rounded-lg bg-white p-1"/>:<div className="w-16 h-16 border-2 border-dashed border-slate-300 dark:border-slate-600 rounded-lg flex items-center justify-center text-[9px] text-slate-400 text-center px-1">Sin logo</div>}
+                                <div className="flex flex-col gap-1">
+                                    <input ref={logoRef} type="file" accept="image/*" onChange={onLogoFile} className="hidden"/>
+                                    <Btn variant="secondary" onClick={()=>logoRef.current.click()} className="text-[10px] px-3 py-1.5">{clinic.logo_data?'Cambiar':'Subir'}</Btn>
+                                    {clinic.logo_data&&<button onClick={()=>setClinic(c=>({...c,logo_data:null}))} className="text-[10px] text-red-500 hover:underline">Quitar</button>}
+                                </div>
+                            </div>
+                            <p className="text-[9px] text-slate-400 mt-1">Recomendado: PNG con fondo transparente, máx 500KB</p>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            <div>
+                                <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 mb-1 block">Nombre *</label>
+                                <Input value={clinic.nombre||''} onChange={e=>setClinic({...clinic,nombre:e.target.value})} placeholder="Arte Dental"/>
+                            </div>
+                            <div>
+                                <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 mb-1 block">Subtítulo</label>
+                                <Input value={clinic.subtitulo||''} onChange={e=>setClinic({...clinic,subtitulo:e.target.value})} placeholder="Consultorio Odontológico"/>
+                            </div>
+                        </div>
+
+                        <div>
+                            <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 mb-1 block">Dirección</label>
+                            <Input value={clinic.direccion||''} onChange={e=>setClinic({...clinic,direccion:e.target.value})} placeholder="Av. Italia 1234"/>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2">
+                            <div>
+                                <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 mb-1 block">Ciudad</label>
+                                <Input value={clinic.ciudad||''} onChange={e=>setClinic({...clinic,ciudad:e.target.value})} placeholder="Montevideo"/>
+                            </div>
+                            <div>
+                                <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 mb-1 block">País</label>
+                                <Input value={clinic.pais||''} onChange={e=>setClinic({...clinic,pais:e.target.value})} placeholder="Uruguay"/>
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            <div>
+                                <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 mb-1 block">Teléfono</label>
+                                <Input value={clinic.telefono||''} onChange={e=>setClinic({...clinic,telefono:e.target.value})} placeholder="+598 2XXX XXXX"/>
+                            </div>
+                            <div>
+                                <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 mb-1 block">Email</label>
+                                <Input type="email" value={clinic.email||''} onChange={e=>setClinic({...clinic,email:e.target.value})} placeholder="contacto@artedental.uy"/>
+                            </div>
+                        </div>
+
+                        <div>
+                            <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 mb-1 block">RUT (opcional)</label>
+                            <Input value={clinic.rut||''} onChange={e=>setClinic({...clinic,rut:e.target.value})} placeholder="218XXXXXXXXX"/>
+                        </div>
+
+                        <div>
+                            <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 mb-1 block">Color principal</label>
+                            <div className="flex items-center gap-2">
+                                <input type="color" value={clinic.color_primario||'#4f46e5'} onChange={e=>setClinic({...clinic,color_primario:e.target.value})} className="w-12 h-10 rounded-lg border border-slate-200 dark:border-slate-700 cursor-pointer"/>
+                                <Input value={clinic.color_primario||'#4f46e5'} onChange={e=>setClinic({...clinic,color_primario:e.target.value})} placeholder="#4f46e5" className="flex-1"/>
+                            </div>
+                            <p className="text-[9px] text-slate-400 mt-1">Color del header en los documentos impresos</p>
+                        </div>
+                    </div>
+                </Card>
+
+                {/* Vista previa */}
+                <Card className="p-4">
+                    <p className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase mb-2">Vista previa del header</p>
+                    <div className="bg-white border border-slate-200 dark:border-slate-700 rounded-lg p-4" style={{borderBottom:`3px solid ${clinic.color_primario||'#4f46e5'}`}}>
+                        <div className="flex items-center gap-3">
+                            {clinic.logo_data&&<img src={clinic.logo_data} className="w-12 h-12 object-contain"/>}
+                            <div>
+                                <p className="font-bold text-base" style={{color:clinic.color_primario||'#4f46e5'}}>{clinic.nombre||'Arte Dental'}</p>
+                                <p className="text-[10px] text-slate-600">{clinic.subtitulo}{clinic.direccion?` — ${clinic.direccion}`:''}{clinic.ciudad?`, ${clinic.ciudad}`:''}</p>
+                                {(clinic.telefono||clinic.email)&&<p className="text-[10px] text-slate-500">{clinic.telefono}{clinic.telefono&&clinic.email?' · ':''}{clinic.email}</p>}
+                            </div>
+                        </div>
+                    </div>
+                </Card>
+
+                <Btn onClick={saveClinic} disabled={clinicSaving} className="w-full py-3 text-sm">{clinicSaving?'Guardando...':'Guardar configuración'}</Btn>
+            </>}
+        </div>}
+
         {tab==='backup'&&<div className="space-y-4">
             <Card className="p-6 text-center"><Download size={32} className="mx-auto text-brand-600 dark:text-brand-400 mb-2"/><h4 className="font-bold mb-2">Exportar</h4><p className="text-[10px] text-slate-400 mb-3">Pacientes, citas, historial, fichas, fotos</p><Btn onClick={async()=>{const d=await S.export();const b=new Blob([d],{type:'application/json'});const u=URL.createObjectURL(b);const a=document.createElement('a');a.href=u;a.download='ArteDental_'+new Date().toISOString().split('T')[0]+'.json';a.click()}} className="w-full py-3 text-sm">Descargar</Btn></Card>
             <Card className="p-6 text-center"><Upload size={32} className="mx-auto text-emerald-600 dark:text-emerald-400 mb-2"/><h4 className="font-bold mb-2">Importar</h4><input type="file" ref={fileRef} accept=".json" className="hidden" onChange={async e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=async ev=>{if(await S.import(ev.target.result)){toast.ok('Importado, recargando...');setTimeout(()=>window.location.reload(),1500)}};r.readAsText(f)}}/><Btn variant="success" onClick={()=>fileRef.current.click()} className="w-full py-3 text-sm">Cargar</Btn></Card>
         </div>}
 
-        {tab==='info'&&<div className="bg-gradient-to-br from-slate-800 to-indigo-900 p-6 rounded-xl text-white text-center"><Cloud size={40} className="mx-auto mb-2"/><h4 className="text-lg font-bold mb-2">Sistema en la Nube</h4><p className="text-white/80 text-sm mb-3">Supabase Auth + Database</p><div className={`inline-flex items-center gap-2 px-4 py-2 rounded-full ${online?'bg-emerald-500':'bg-red-500'}`}>{online?<><Wifi size={16}/>Conectado</>:<><WifiOff size={16}/>Offline</>}</div><p className="text-white/60 text-[10px] mt-3">v3.7 • Pago global + KPIs detallados</p></div>}
+        {tab==='info'&&<div className="bg-gradient-to-br from-slate-800 to-indigo-900 p-6 rounded-xl text-white text-center"><Cloud size={40} className="mx-auto mb-2"/><h4 className="text-lg font-bold mb-2">Sistema en la Nube</h4><p className="text-white/80 text-sm mb-3">Supabase Auth + Database</p><div className={`inline-flex items-center gap-2 px-4 py-2 rounded-full ${online?'bg-emerald-500':'bg-red-500'}`}>{online?<><Wifi size={16}/>Conectado</>:<><WifiOff size={16}/>Offline</>}</div><p className="text-white/60 text-[10px] mt-3">v3.9 • Configuración de clínica</p></div>}
     </div>
 };
 
@@ -2134,7 +2541,7 @@ const App=()=>{
             {tab==='admin'&&<Admin user={user} online={online} onUserUpdated={u=>setUser({...user,...u})}/>}
         </main>
 
-        <footer className="p-2 text-center text-[10px] text-slate-400 no-print safe-bottom">Arte Dental © 2025 • v3.7 • {online?'🟢':'🔴'}</footer>
+        <footer className="p-2 text-center text-[10px] text-slate-400 no-print safe-bottom">Arte Dental © 2025 • v3.9 • {online?'🟢':'🔴'}</footer>
     </div>
 };
 
