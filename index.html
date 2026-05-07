@@ -146,7 +146,20 @@ const S={
     getMed:async pid=>{const{data}=await supabase.from('medical_records').select('*').eq('paciente_id',pid).maybeSingle();return data},
     saveMed:async r=>{const ex=await S.getMed(r.paciente_id);return ex?DB.update('medical_records',ex.id,r):DB.insert('medical_records',r)},
     hasCond:async pid=>{const r=await S.getMed(pid);if(!r)return false;return(r.alergias?.length>0)||(r.alergias_medicamentos?.length>0)||(r.medicacion_actual?.length>0)||Object.entries(r.antecedentes_personales||{}).some(([k,v])=>k!=='otros'&&v===true)},
-    export:async()=>JSON.stringify({patients:await DB.getAll('patients'),appointments:await DB.getAll('appointments'),history:await DB.getAll('history'),images:await DB.getAll('images'),medical_records:await DB.getAll('medical_records')},null,2),
+    export:async()=>JSON.stringify({
+        patients:await DB.getAll('patients'),
+        appointments:await DB.getAll('appointments'),
+        history:await DB.getAll('history'),
+        images:await DB.getAll('images'),
+        medical_records:await DB.getAll('medical_records'),
+        treatments:await DB.getAll('treatments'),
+        treatment_comments:await DB.getAll('treatment_comments'),
+        consent_templates:await DB.getAll('consent_templates'),
+        consent_records:await DB.getAll('consent_records'),
+        clinic_config:await DB.getAll('clinic_config'),
+        _exportedAt:new Date().toISOString(),
+        _version:'3.10'
+    },null,2),
     import:async json=>{
         try{
             const d=JSON.parse(json);
@@ -236,43 +249,229 @@ const Login=({onLogin,online})=>{
 };
 
 // ===== DASHBOARD =====
+// Componente de gráfico de barras inline (SVG, sin dependencias)
+const BarChart=({data,color='#4f46e5',height=120,formatValue=v=>v})=>{
+    if(!data||!data.length)return<div className="text-center text-xs text-slate-400 py-8">Sin datos</div>;
+    const max=Math.max(...data.map(d=>d.value),1);
+    const w=100/data.length;
+    return<div className="w-full">
+        <svg viewBox={`0 0 100 ${height}`} className="w-full" preserveAspectRatio="none" style={{height:`${height}px`}}>
+            {data.map((d,i)=>{
+                const h=(d.value/max)*(height-22);
+                const x=i*w;
+                const y=height-h-18;
+                return<g key={i}>
+                    <rect x={x+w*0.15} y={y} width={w*0.7} height={h} fill={color} rx="0.5"/>
+                </g>;
+            })}
+        </svg>
+        <div className="flex w-full mt-1">{data.map((d,i)=><div key={i} className="flex-1 text-center"><p className="text-[8px] font-bold text-slate-700 dark:text-slate-300 leading-none">{formatValue(d.value)}</p><p className="text-[8px] text-slate-400 truncate">{d.label}</p></div>)}</div>
+    </div>;
+};
+
+// Componente de gráfico de líneas/área simple
+const LineChart=({data,color='#10b981',height=80})=>{
+    if(!data||data.length<2)return<div className="text-center text-xs text-slate-400 py-4">Necesita más datos</div>;
+    const max=Math.max(...data.map(d=>d.value),1);
+    const min=Math.min(...data.map(d=>d.value),0);
+    const range=max-min||1;
+    const points=data.map((d,i)=>{
+        const x=(i/(data.length-1))*100;
+        const y=height-((d.value-min)/range)*(height-10)-5;
+        return`${x},${y}`;
+    }).join(' ');
+    const areaPoints=`0,${height} ${points} 100,${height}`;
+    return<svg viewBox={`0 0 100 ${height}`} className="w-full" preserveAspectRatio="none" style={{height:`${height}px`}}>
+        <polygon points={areaPoints} fill={color} fillOpacity="0.2"/>
+        <polyline points={points} fill="none" stroke={color} strokeWidth="1.5"/>
+        {data.map((d,i)=>{const x=(i/(data.length-1))*100;const y=height-((d.value-min)/range)*(height-10)-5;return<circle key={i} cx={x} cy={y} r="1.2" fill={color}/>})}
+    </svg>;
+};
+
 const Dashboard=({user,onOpenPatient})=>{
-    const[stats,setStats]=useState(null);const[upcoming,setUpcoming]=useState([]);
+    const[stats,setStats]=useState(null);
+    const[upcoming,setUpcoming]=useState([]);
+    const[deudores,setDeudores]=useState([]);
+    const[ingresosMensuales,setIngresosMensuales]=useState([]);
+    const[citasMensuales,setCitasMensuales]=useState([]);
+    const[topTratamientos,setTopTratamientos]=useState([]);
+
     useEffect(()=>{(async()=>{
-        const[pts,apps,hist]=await Promise.all([S.getPatients(),S.getApps(),DB.getAll('history',{notDeleted:true})]);
-        const today=new Date().toISOString().split('T')[0];
+        // Helpers locales (definidos aquí porque MONTHS y parseFechaUY se definen más abajo en el archivo)
+        const monthsArr=['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+        const parseDate=s=>{
+            if(!s)return null;
+            if(/^\d{4}-\d{2}-\d{2}/.test(s))return new Date(s);
+            const m=/^(\d{1,2})\/(\d{1,2})\/(\d{4})/.exec(s);
+            if(m)return new Date(parseInt(m[3]),parseInt(m[2])-1,parseInt(m[1]));
+            return new Date(s);
+        };
+        const[pts,apps,hist,trs]=await Promise.all([
+            S.getPatients(),
+            S.getApps(),
+            DB.getAll('history',{notDeleted:true}),
+            DB.getAll('treatments',{notDeleted:true})
+        ]);
+        const todayStr=new Date().toISOString().split('T')[0];
         const past=apps.filter(a=>isPast(a.fecha,a.hora));
         const pastDecidido=past.filter(a=>a.asistio===true||a.asistio===false);
         const asistidas=past.filter(a=>a.asistio===true).length;
-        const cobrado=hist.filter(h=>h.tipo==='PAGO').reduce((s,h)=>{const m=/\$(\d+)/.exec(h.motivo||'');return s+(m?parseInt(m[1]):0)},0);
+
+        // Ingresos: usar treatments (más fiable que parsear historia)
+        const ingresosTotales=trs.reduce((s,t)=>s+(parseFloat(t.pagado)||0),0);
+        const totalPresup=trs.reduce((s,t)=>s+(parseFloat(t.cantidad)||0)*(parseFloat(t.precio_unit)||0),0);
+        const saldoPendiente=trs.filter(t=>t.estado!=='rechazado'&&t.estado!=='abandonado').reduce((s,t)=>s+Math.max(0,(parseFloat(t.cantidad)||0)*(parseFloat(t.precio_unit)||0)-(parseFloat(t.pagado)||0)),0);
+
+        // Pacientes nuevos del mes en curso
+        const now=new Date();
+        const monthStart=new Date(now.getFullYear(),now.getMonth(),1);
+        const ptsNuevos=pts.filter(p=>{const c=p.created_at?new Date(p.created_at):null;return c&&c>=monthStart}).length;
+
+        // Ingresos del mes en curso (basado en historial PAGO)
+        const pagosMes=hist.filter(h=>{
+            if(h.tipo!=='PAGO')return false;
+            const d=parseDate(h.fecha);
+            return d&&d>=monthStart;
+        });
+        const cobradoMes=pagosMes.reduce((s,h)=>{const m=/\$(\d+(?:[.,]\d+)?)/.exec(h.motivo||'');return s+(m?parseFloat(m[1].replace(',','.')):0)},0);
+
+        // Tendencia ingresos últimos 6 meses
+        const months=[];
+        for(let i=5;i>=0;i--){
+            const d=new Date(now.getFullYear(),now.getMonth()-i,1);
+            const next=new Date(now.getFullYear(),now.getMonth()-i+1,1);
+            const sum=hist.filter(h=>{
+                if(h.tipo!=='PAGO')return false;
+                const fd=parseDate(h.fecha);
+                return fd&&fd>=d&&fd<next;
+            }).reduce((s,h)=>{const m=/\$(\d+(?:[.,]\d+)?)/.exec(h.motivo||'');return s+(m?parseFloat(m[1].replace(',','.')):0)},0);
+            months.push({label:monthsArr[d.getMonth()],value:sum});
+        }
+        setIngresosMensuales(months);
+
+        // Citas por mes (últimos 6 meses)
+        const citasPorMes=[];
+        for(let i=5;i>=0;i--){
+            const d=new Date(now.getFullYear(),now.getMonth()-i,1);
+            const next=new Date(now.getFullYear(),now.getMonth()-i+1,1);
+            const cnt=apps.filter(a=>{const fd=new Date(a.fecha);return fd>=d&&fd<next}).length;
+            citasPorMes.push({label:monthsArr[d.getMonth()],value:cnt});
+        }
+        setCitasMensuales(citasPorMes);
+
+        // Top tratamientos por frecuencia
+        const tratamientoCount={};
+        for(const t of trs){const k=(t.descripcion||'').trim().toLowerCase();if(!k)continue;tratamientoCount[k]=(tratamientoCount[k]||0)+1}
+        const top=Object.entries(tratamientoCount).sort((a,b)=>b[1]-a[1]).slice(0,5).map(([label,value])=>({label:label.length>20?label.slice(0,20)+'…':label,value}));
+        setTopTratamientos(top);
+
+        // Top deudores (pacientes con saldo pendiente)
+        const ptMap=Object.fromEntries(pts.map(p=>[p.id,p]));
+        const debtsByPatient={};
+        for(const t of trs){
+            if(t.estado==='rechazado'||t.estado==='abandonado')continue;
+            const por=Math.max(0,(parseFloat(t.cantidad)||0)*(parseFloat(t.precio_unit)||0)-(parseFloat(t.pagado)||0));
+            if(por<=0)continue;
+            debtsByPatient[t.paciente_id]=(debtsByPatient[t.paciente_id]||0)+por;
+        }
+        const deudoresList=Object.entries(debtsByPatient).map(([pid,amount])=>({patient:ptMap[pid],amount})).filter(d=>d.patient).sort((a,b)=>b.amount-a.amount).slice(0,5);
+        setDeudores(deudoresList);
+
         setStats({
             totalPacientes:pts.length,
-            citasHoy:apps.filter(a=>a.fecha===today&&!isPast(a.fecha,a.hora)).length,
+            ptsNuevos,
+            citasHoy:apps.filter(a=>a.fecha===todayStr&&!isPast(a.fecha,a.hora)).length,
             citasProximas:apps.filter(a=>!isPast(a.fecha,a.hora)).length,
             asistenciaPct:pastDecidido.length?Math.round((asistidas/pastDecidido.length)*100):null,
-            saldoPendiente:pts.reduce((s,p)=>s+Math.max(0,(p.presupuesto||0)-(p.abonado||0)),0),
-            cobrado
+            saldoPendiente,
+            cobradoMes,
+            cobradoTotal:ingresosTotales,
+            totalPresup,
+            tratamientosActivos:trs.filter(t=>t.estado==='aceptado'||t.estado==='creado').length
         });
         setUpcoming(apps.filter(a=>!isPast(a.fecha,a.hora)).sort((a,b)=>new Date(a.fecha+'T'+a.hora)-new Date(b.fecha+'T'+b.hora)).slice(0,5));
     })()},[]);
 
     if(!stats)return<div className="p-8 text-center text-slate-400"><RefreshCw className="animate-spin mx-auto mb-2" size={24}/>Cargando...</div>;
-    const StatCard=({label,value,icon:Icon,color,sub})=><Card className="p-4"><div className="flex justify-between items-start"><div><p className="text-[10px] font-bold text-slate-400 uppercase">{label}</p><p className={`text-2xl font-bold ${color}`}>{value}</p>{sub&&<p className="text-[10px] text-slate-400">{sub}</p>}</div><Icon size={20} className={color}/></div></Card>;
+
+    const KpiCard=({label,value,icon:Icon,color,sub,bg})=><Card className={`p-3 ${bg||''}`}>
+        <div className="flex justify-between items-start gap-2">
+            <div className="min-w-0 flex-1">
+                <p className="text-[9px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wide">{label}</p>
+                <p className={`text-xl font-bold ${color} mt-0.5 truncate`}>{value}</p>
+                {sub&&<p className="text-[9px] text-slate-400 mt-0.5 truncate">{sub}</p>}
+            </div>
+            <Icon size={18} className={`${color} shrink-0`}/>
+        </div>
+    </Card>;
 
     return<div className="space-y-4 animate-fade-in">
-        <div className="bg-gradient-to-br from-slate-800 to-indigo-900 p-4 rounded-xl text-white"><h2 className="text-lg font-bold">Hola, {user.name} 👋</h2><p className="text-[11px] text-white/70">{new Date().toLocaleDateString('es-UY',{weekday:'long',day:'numeric',month:'long'})}</p></div>
-        <div className="grid grid-cols-2 gap-3">
-            <StatCard label="Pacientes" value={stats.totalPacientes} icon={Users} color="text-brand-600 dark:text-brand-400"/>
-            <StatCard label="Citas hoy" value={stats.citasHoy} icon={Calendar} color="text-emerald-600 dark:text-emerald-400"/>
-            <StatCard label="Próximas" value={stats.citasProximas} icon={Clock} color="text-amber-600 dark:text-amber-400"/>
-            <StatCard label="Asistencia" value={stats.asistenciaPct===null?'—':stats.asistenciaPct+'%'} icon={TrendingUp} color="text-indigo-600 dark:text-indigo-400" sub="citas pasadas"/>
-            <StatCard label="Saldo pendiente" value={'$'+stats.saldoPendiente.toLocaleString('es-UY')} icon={DollarSign} color="text-red-600 dark:text-red-400"/>
-            <StatCard label="Cobrado" value={'$'+stats.cobrado.toLocaleString('es-UY')} icon={Activity} color="text-slate-600 dark:text-slate-300" sub="histórico"/>
+        {/* Saludo */}
+        <div className="bg-gradient-to-br from-slate-800 to-indigo-900 p-4 rounded-xl text-white">
+            <h2 className="text-lg font-bold">Hola, {user.name} 👋</h2>
+            <p className="text-[11px] text-white/70">{new Date().toLocaleDateString('es-UY',{weekday:'long',day:'numeric',month:'long',year:'numeric'})}</p>
         </div>
-        {upcoming.length>0&&<Card className="overflow-hidden">
-            <div className="p-3 border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/50"><h3 className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">Próximas citas</h3></div>
-            <div className="divide-y divide-slate-200 dark:divide-slate-700">{upcoming.map(a=><button key={a.id} onClick={()=>onOpenPatient(a.paciente_id)} className="w-full p-3 flex justify-between items-center hover:bg-slate-50 dark:hover:bg-slate-700/50 text-left"><div><p className="font-bold text-sm">{a.paciente_nombre}</p><p className="text-[10px] text-slate-400">Dr. {a.odontologo}</p></div><div className="text-right"><p className="text-xs font-bold text-brand-600 dark:text-brand-400">{a.fecha}</p><p className="text-[10px] text-slate-400">{a.hora}</p></div></button>)}</div>
-        </Card>}
+
+        {/* KPIs principales: dinero */}
+        <div>
+            <p className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase mb-2 px-1">💰 Resumen económico</p>
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
+                <KpiCard label="Cobrado este mes" value={'$'+stats.cobradoMes.toLocaleString('es-UY')} icon={DollarSign} color="text-emerald-600 dark:text-emerald-400"/>
+                <KpiCard label="Saldo pendiente" value={'$'+stats.saldoPendiente.toLocaleString('es-UY')} icon={AlertTriangle} color="text-red-600 dark:text-red-400" sub={deudores.length+' deudor'+(deudores.length!==1?'es':'')}/>
+                <KpiCard label="Cobrado total" value={'$'+stats.cobradoTotal.toLocaleString('es-UY')} icon={TrendingUp} color="text-brand-600 dark:text-brand-400" sub="histórico"/>
+                <KpiCard label="Tratamientos activos" value={stats.tratamientosActivos} icon={Activity} color="text-indigo-600 dark:text-indigo-400"/>
+            </div>
+        </div>
+
+        {/* KPIs de actividad */}
+        <div>
+            <p className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase mb-2 px-1">📊 Actividad</p>
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
+                <KpiCard label="Pacientes" value={stats.totalPacientes} icon={Users} color="text-slate-600 dark:text-slate-300" sub={'+'+stats.ptsNuevos+' este mes'}/>
+                <KpiCard label="Citas hoy" value={stats.citasHoy} icon={Calendar} color="text-emerald-600 dark:text-emerald-400"/>
+                <KpiCard label="Próximas" value={stats.citasProximas} icon={Clock} color="text-amber-600 dark:text-amber-400"/>
+                <KpiCard label="Asistencia" value={stats.asistenciaPct===null?'—':stats.asistenciaPct+'%'} icon={CheckCircle2} color="text-indigo-600 dark:text-indigo-400" sub="histórico"/>
+            </div>
+        </div>
+
+        {/* Gráficos */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+            <Card className="p-4">
+                <p className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase mb-2">📈 Ingresos últimos 6 meses</p>
+                <BarChart data={ingresosMensuales} color="#10b981" height={100} formatValue={v=>v>=1000?(v/1000).toFixed(0)+'k':v}/>
+            </Card>
+            <Card className="p-4">
+                <p className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase mb-2">📅 Citas últimos 6 meses</p>
+                <BarChart data={citasMensuales} color="#4f46e5" height={100}/>
+            </Card>
+        </div>
+
+        {/* Próximas citas + Top deudores + Top tratamientos */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+            {upcoming.length>0&&<Card className="overflow-hidden">
+                <div className="p-3 border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/50"><h3 className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">Próximas citas</h3></div>
+                <div className="divide-y divide-slate-200 dark:divide-slate-700">{upcoming.map(a=><button key={a.id} onClick={()=>onOpenPatient(a.paciente_id)} className="w-full p-3 flex justify-between items-center hover:bg-slate-50 dark:hover:bg-slate-700/50 text-left">
+                    <div className="min-w-0 flex-1"><p className="font-bold text-xs truncate">{a.paciente_nombre}</p><p className="text-[10px] text-slate-400 truncate">Dr. {a.odontologo}</p></div>
+                    <div className="text-right shrink-0 ml-2"><p className="text-[11px] font-bold text-brand-600 dark:text-brand-400">{a.fecha}</p><p className="text-[10px] text-slate-400">{a.hora}</p></div>
+                </button>)}</div>
+            </Card>}
+
+            {deudores.length>0&&<Card className="overflow-hidden">
+                <div className="p-3 border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/50"><h3 className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">Mayores saldos pendientes</h3></div>
+                <div className="divide-y divide-slate-200 dark:divide-slate-700">{deudores.map(d=><button key={d.patient.id} onClick={()=>onOpenPatient(d.patient.id)} className="w-full p-3 flex justify-between items-center hover:bg-slate-50 dark:hover:bg-slate-700/50 text-left">
+                    <div className="min-w-0 flex-1"><p className="font-bold text-xs truncate">{d.patient.nombre}</p><p className="text-[10px] text-slate-400">CI {formatCI(d.patient.ci)}</p></div>
+                    <p className="text-[11px] font-bold text-red-600 dark:text-red-400 shrink-0 ml-2">${d.amount.toLocaleString('es-UY')}</p>
+                </button>)}</div>
+            </Card>}
+
+            {topTratamientos.length>0&&<Card className="overflow-hidden">
+                <div className="p-3 border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/50"><h3 className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">Tratamientos más frecuentes</h3></div>
+                <div className="divide-y divide-slate-200 dark:divide-slate-700">{topTratamientos.map((t,i)=><div key={i} className="p-3 flex justify-between items-center text-xs">
+                    <span className="capitalize truncate">{t.label}</span>
+                    <span className="font-bold text-brand-600 dark:text-brand-400 shrink-0 ml-2">×{t.value}</span>
+                </div>)}</div>
+            </Card>}
+        </div>
     </div>
 };
 
@@ -463,16 +662,39 @@ const Agenda=({user,onOpenPatient})=>{
     const[drFilter,setDrFilter]=useState('');
     const[apps,setApps]=useState([]);const[pts,setPts]=useState([]);const[users,setUsers]=useState([]);
     const[cond,setCond]=useState({});
+    const[clinic,setClinic]=useState(null);
 
     useEffect(()=>{load()},[]);
-    const load=async()=>{const[a,p,u]=await Promise.all([S.getApps(),S.getPatients(),S.getUsers()]);setApps(a);setPts(p);setUsers(u);const c={};for(const pt of p)c[pt.id]=await S.hasCond(pt.id);setCond(c)};
+    const load=async()=>{const[a,p,u,c]=await Promise.all([S.getApps(),S.getPatients(),S.getUsers(),S.getClinicConfig()]);setApps(a);setPts(p);setUsers(u);setClinic(c);const cc={};for(const pt of p)cc[pt.id]=await S.hasCond(pt.id);setCond(cc)};
 
     const odontologos=users.filter(u=>u.role===Role.ODONTOLOGO);
 
+    // Citas pendientes de recordar
+    const recordatoriosPendientes=useMemo(()=>{
+        if(!clinic)return[];
+        const horas=clinic.reminder_hours_before||24;
+        const ahora=new Date();
+        const limite=new Date(ahora.getTime()+horas*60*60*1000);
+        return apps.filter(a=>{
+            if(a.deleted)return false;
+            // Solo citas futuras dentro del rango configurado
+            const fcita=new Date(a.fecha+'T'+a.hora);
+            if(fcita<=ahora)return false;
+            if(fcita>limite)return false;
+            // Si ya se recordó hace menos de 12hs, no mostrar
+            if(a.reminder_sent_at){const last=new Date(a.reminder_sent_at);if((ahora-last)<12*60*60*1000)return false}
+            return true;
+        }).sort((a,b)=>new Date(a.fecha+'T'+a.hora)-new Date(b.fecha+'T'+b.hora));
+    },[apps,clinic]);
+
     return<div className="space-y-3 animate-fade-in">
-        <div className="flex gap-2">
-            <Btn onClick={()=>setTab('dia')} variant={tab==='dia'?'primary':'secondary'} className="flex-1 py-2 text-xs"><Clock size={14} className="inline mr-1"/>Día</Btn>
-            <Btn onClick={()=>setTab('mes')} variant={tab==='mes'?'primary':'secondary'} className="flex-1 py-2 text-xs"><Calendar size={14} className="inline mr-1"/>Mes</Btn>
+        <div className="flex gap-2 overflow-x-auto scrollbar-hide">
+            <Btn onClick={()=>setTab('dia')} variant={tab==='dia'?'primary':'secondary'} className="flex-1 py-2 text-xs whitespace-nowrap"><Clock size={14} className="inline mr-1"/>Día</Btn>
+            <Btn onClick={()=>setTab('mes')} variant={tab==='mes'?'primary':'secondary'} className="flex-1 py-2 text-xs whitespace-nowrap"><Calendar size={14} className="inline mr-1"/>Mes</Btn>
+            <Btn onClick={()=>setTab('recordar')} variant={tab==='recordar'?'primary':'secondary'} className="flex-1 py-2 text-xs whitespace-nowrap relative">
+                <Phone size={14} className="inline mr-1"/>Recordar
+                {recordatoriosPendientes.length>0&&<span className="ml-1 bg-red-500 text-white text-[9px] px-1.5 rounded-full">{recordatoriosPendientes.length}</span>}
+            </Btn>
         </div>
 
         {tab==='dia'&&<>
@@ -486,7 +708,106 @@ const Agenda=({user,onOpenPatient})=>{
         </>}
 
         {tab==='mes'&&<MonthView apps={apps} onPickDay={d=>{setDate(d);setTab('dia')}}/>}
+
+        {tab==='recordar'&&<RecordatoriosPanel pendientes={recordatoriosPendientes} pts={pts} clinic={clinic} onReload={load}/>}
     </div>
+};
+
+// Panel de recordatorios WhatsApp
+const RecordatoriosPanel=({pendientes,pts,clinic,onReload})=>{
+    const ptMap=useMemo(()=>Object.fromEntries(pts.map(p=>[p.id,p])),[pts]);
+    const horas=clinic?.reminder_hours_before||24;
+    const template=clinic?.whatsapp_template||'Hola {{paciente}}! Te recuerdo tu cita en {{clinica}}: {{fecha}} a las {{hora}} con Dr/a {{odontologo}}. Por favor confirma asistencia. Gracias!';
+
+    const buildMessage=(app,patient)=>{
+        return template
+            .replace(/{{paciente}}/g,patient?.nombre||'')
+            .replace(/{{fecha}}/g,app.fecha||'')
+            .replace(/{{hora}}/g,app.hora||'')
+            .replace(/{{odontologo}}/g,app.odontologo||'')
+            .replace(/{{clinica}}/g,clinic?.nombre||'Arte Dental')
+            .replace(/{{tratamiento}}/g,app.tratamiento||'consulta');
+    };
+
+    const cleanPhone=ph=>{
+        if(!ph)return null;
+        // Remover todo lo que no sea dígito
+        let n=ph.replace(/\D/g,'');
+        // Si empieza con 0, quitarlo (ej: 098123456 -> 98123456)
+        if(n.startsWith('0'))n=n.slice(1);
+        // Si no tiene código de país, agregar 598 (Uruguay)
+        if(!n.startsWith('598'))n='598'+n;
+        return n;
+    };
+
+    const sendWhatsApp=async(app,patient)=>{
+        const phone=cleanPhone(patient?.telefono);
+        if(!phone)return toast.warn('Paciente sin teléfono');
+        const msg=buildMessage(app,patient);
+        const url=`https://wa.me/${phone}?text=${encodeURIComponent(msg)}`;
+        window.open(url,'_blank');
+        // Marcar como recordado
+        await DB.update('appointments',app.id,{reminder_sent_at:new Date().toISOString()});
+        toast.ok('Recordatorio abierto en WhatsApp');
+        if(onReload)onReload();
+    };
+
+    const skipReminder=async(app)=>{
+        await DB.update('appointments',app.id,{reminder_sent_at:new Date().toISOString()});
+        toast.ok('Marcado como recordado');
+        if(onReload)onReload();
+    };
+
+    const copyMessage=async(app,patient)=>{
+        const msg=buildMessage(app,patient);
+        try{await navigator.clipboard.writeText(msg);toast.ok('Mensaje copiado al portapapeles')}
+        catch{toast.warn('No se pudo copiar')}
+    };
+
+    if(!clinic)return<div className="p-8 text-center"><RefreshCw className="animate-spin mx-auto" size={20}/></div>;
+
+    return<div className="space-y-3">
+        <Card className="p-3 bg-emerald-50/50 dark:bg-emerald-900/20 border-l-4 border-emerald-500">
+            <p className="text-xs font-bold text-emerald-700 dark:text-emerald-300 mb-1">📱 Recordatorios pendientes</p>
+            <p className="text-[10px] text-slate-600 dark:text-slate-400">Citas que ocurren en las próximas <strong>{horas} horas</strong>. Tocá WhatsApp para abrir el chat con el mensaje listo.</p>
+            <p className="text-[9px] text-slate-500 dark:text-slate-400 mt-1 italic">💡 Configurá la plantilla y el tiempo en Sistema → Clínica.</p>
+        </Card>
+
+        {pendientes.length===0?<Card className="p-8 text-center">
+            <CheckCircle2 size={32} className="mx-auto text-emerald-500 mb-2"/>
+            <p className="font-bold text-sm">Sin recordatorios pendientes</p>
+            <p className="text-[10px] text-slate-400 mt-1">No hay citas en las próximas {horas} horas (o ya fueron recordadas)</p>
+        </Card>:<div className="space-y-2">
+            {pendientes.map(app=>{
+                const patient=ptMap[app.paciente_id];
+                const tienetel=!!patient?.telefono;
+                const fcita=new Date(app.fecha+'T'+app.hora);
+                const horasFaltan=Math.round((fcita-new Date())/(1000*60*60));
+                return<Card key={app.id} className="p-3">
+                    <div className="flex justify-between items-start gap-2 mb-2 flex-wrap">
+                        <div className="min-w-0 flex-1">
+                            <p className="font-bold text-sm truncate">{patient?.nombre||'Paciente desconocido'}</p>
+                            <p className="text-[11px] text-slate-500 dark:text-slate-400">{app.fecha} · {app.hora} · Dr. {app.odontologo}</p>
+                            {app.tratamiento&&<p className="text-[10px] text-slate-400 truncate">{app.tratamiento}</p>}
+                        </div>
+                        <span className="bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400 text-[9px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap">en {horasFaltan}h</span>
+                    </div>
+
+                    {patient?.telefono?<p className="text-[10px] text-slate-500 dark:text-slate-400 mb-2">📱 {patient.telefono}</p>
+                    :<p className="text-[10px] text-red-500 mb-2">⚠️ Sin teléfono registrado</p>}
+
+                    {/* Vista previa del mensaje */}
+                    <div className="bg-slate-50 dark:bg-slate-700/30 rounded p-2 mb-2 text-[10px] whitespace-pre-wrap line-clamp-3">{buildMessage(app,patient)}</div>
+
+                    <div className="flex gap-2 flex-wrap">
+                        <Btn onClick={()=>sendWhatsApp(app,patient)} disabled={!tienetel} variant="success" className="flex-1 py-2 text-xs">💬 WhatsApp</Btn>
+                        <Btn onClick={()=>copyMessage(app,patient)} variant="secondary" className="py-2 text-xs px-3" title="Copiar mensaje">📋</Btn>
+                        <Btn onClick={()=>skipReminder(app)} variant="secondary" className="py-2 text-xs px-3" title="Marcar como recordado sin enviar">✓ Saltar</Btn>
+                    </div>
+                </Card>;
+            })}
+        </div>}
+    </div>;
 };
 
 // ===== ODONTOGRAMA =====
@@ -2443,6 +2764,40 @@ const Admin=({user,online,onUserUpdated})=>{
                     </div>
                 </Card>
 
+                {/* Recordatorios WhatsApp */}
+                <Card className="p-4">
+                    <SectionTitle color="text-emerald-600 dark:text-emerald-400">📱 Recordatorios WhatsApp</SectionTitle>
+                    <p className="text-[10px] text-slate-400 mb-3">Configurá la plantilla del mensaje y cuántas horas antes mostrar el recordatorio.</p>
+                    <div className="space-y-3">
+                        <div>
+                            <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 mb-1 block">Recordar con cuántas horas de anticipación</label>
+                            <Select value={String(clinic.reminder_hours_before||24)} onChange={e=>setClinic({...clinic,reminder_hours_before:parseInt(e.target.value)})}>
+                                <option value="2">2 horas (mismo día por la mañana)</option>
+                                <option value="6">6 horas</option>
+                                <option value="12">12 horas (la noche anterior)</option>
+                                <option value="24">24 horas (1 día antes)</option>
+                                <option value="48">48 horas (2 días antes)</option>
+                                <option value="72">72 horas (3 días antes)</option>
+                            </Select>
+                        </div>
+                        <div>
+                            <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 mb-1 block">Plantilla del mensaje</label>
+                            <Textarea value={clinic.whatsapp_template||''} onChange={e=>setClinic({...clinic,whatsapp_template:e.target.value})} placeholder="Hola {{paciente}}! Te recuerdo tu cita..." className="h-24 resize-none text-xs"/>
+                            <p className="text-[9px] text-slate-400 mt-1">Placeholders disponibles: <code className="bg-slate-100 dark:bg-slate-700 px-1 rounded">{`{{paciente}}`}</code> <code className="bg-slate-100 dark:bg-slate-700 px-1 rounded">{`{{fecha}}`}</code> <code className="bg-slate-100 dark:bg-slate-700 px-1 rounded">{`{{hora}}`}</code> <code className="bg-slate-100 dark:bg-slate-700 px-1 rounded">{`{{odontologo}}`}</code> <code className="bg-slate-100 dark:bg-slate-700 px-1 rounded">{`{{clinica}}`}</code> <code className="bg-slate-100 dark:bg-slate-700 px-1 rounded">{`{{tratamiento}}`}</code></p>
+                        </div>
+                        <div className="bg-emerald-50 dark:bg-emerald-900/20 border-l-4 border-emerald-500 p-3 rounded-r-lg">
+                            <p className="text-[10px] font-bold text-emerald-700 dark:text-emerald-300 mb-1">Vista previa del mensaje:</p>
+                            <p className="text-xs text-slate-700 dark:text-slate-300 whitespace-pre-wrap">{(clinic.whatsapp_template||'')
+                                .replace(/{{paciente}}/g,'Juan Pérez')
+                                .replace(/{{fecha}}/g,'mañana 15/05')
+                                .replace(/{{hora}}/g,'10:30')
+                                .replace(/{{odontologo}}/g,'Sebastián')
+                                .replace(/{{clinica}}/g,clinic.nombre||'Arte Dental')
+                                .replace(/{{tratamiento}}/g,'Limpieza dental')}</p>
+                        </div>
+                    </div>
+                </Card>
+
                 {/* Vista previa */}
                 <Card className="p-4">
                     <p className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase mb-2">Vista previa del header</p>
@@ -2463,22 +2818,211 @@ const Admin=({user,online,onUserUpdated})=>{
         </div>}
 
         {tab==='backup'&&<div className="space-y-4">
-            <Card className="p-6 text-center"><Download size={32} className="mx-auto text-brand-600 dark:text-brand-400 mb-2"/><h4 className="font-bold mb-2">Exportar</h4><p className="text-[10px] text-slate-400 mb-3">Pacientes, citas, historial, fichas, fotos</p><Btn onClick={async()=>{const d=await S.export();const b=new Blob([d],{type:'application/json'});const u=URL.createObjectURL(b);const a=document.createElement('a');a.href=u;a.download='ArteDental_'+new Date().toISOString().split('T')[0]+'.json';a.click()}} className="w-full py-3 text-sm">Descargar</Btn></Card>
-            <Card className="p-6 text-center"><Upload size={32} className="mx-auto text-emerald-600 dark:text-emerald-400 mb-2"/><h4 className="font-bold mb-2">Importar</h4><input type="file" ref={fileRef} accept=".json" className="hidden" onChange={async e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=async ev=>{if(await S.import(ev.target.result)){toast.ok('Importado, recargando...');setTimeout(()=>window.location.reload(),1500)}};r.readAsText(f)}}/><Btn variant="success" onClick={()=>fileRef.current.click()} className="w-full py-3 text-sm">Cargar</Btn></Card>
+            {(()=>{const d=daysSinceBackup();const ok=d<BACKUP_INTERVAL_DAYS;return<Card className={`p-3 border-l-4 ${ok?'border-l-emerald-500 bg-emerald-50/30 dark:bg-emerald-900/10':'border-l-amber-500 bg-amber-50/30 dark:bg-amber-900/10'}`}>
+                <div className="flex items-center gap-2 text-xs">
+                    {ok?<CheckCircle2 size={16} className="text-emerald-500 shrink-0"/>:<AlertTriangle size={16} className="text-amber-500 shrink-0"/>}
+                    <div>
+                        <p className="font-bold">{d===Infinity?'Nunca hiciste backup':d===0?'Backup hecho hoy':`Último backup hace ${d} día${d!==1?'s':''}`}</p>
+                        <p className="text-[10px] text-slate-500 dark:text-slate-400">Recordatorio cada {BACKUP_INTERVAL_DAYS} días</p>
+                    </div>
+                </div>
+            </Card>})()}
+            <Card className="p-6 text-center"><Download size={32} className="mx-auto text-brand-600 dark:text-brand-400 mb-2"/><h4 className="font-bold mb-2">Exportar</h4><p className="text-[10px] text-slate-400 mb-3">Pacientes, citas, historial, fichas, fotos, tratamientos, consentimientos, configuración</p><Btn onClick={async()=>{const d=await S.export();const b=new Blob([d],{type:'application/json'});const u=URL.createObjectURL(b);const a=document.createElement('a');a.href=u;a.download='ArteDental_Backup_'+new Date().toISOString().split('T')[0]+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(u),1000);markBackupDone();toast.ok('Backup descargado')}} className="w-full py-3 text-sm">Descargar backup</Btn></Card>
+            <Card className="p-6 text-center"><Upload size={32} className="mx-auto text-emerald-600 dark:text-emerald-400 mb-2"/><h4 className="font-bold mb-2">Importar</h4><p className="text-[10px] text-slate-400 mb-3">⚠️ Esto puede sobrescribir datos. Hacé backup antes.</p><input type="file" ref={fileRef} accept=".json" className="hidden" onChange={async e=>{const f=e.target.files[0];if(!f)return;if(!confirm('¿Cargar este backup? Los datos actuales pueden ser sobrescritos.'))return;const r=new FileReader();r.onload=async ev=>{if(await S.import(ev.target.result)){toast.ok('Importado, recargando...');setTimeout(()=>window.location.reload(),1500)}};r.readAsText(f)}}/><Btn variant="success" onClick={()=>fileRef.current.click()} className="w-full py-3 text-sm">Cargar backup</Btn></Card>
         </div>}
 
-        {tab==='info'&&<div className="bg-gradient-to-br from-slate-800 to-indigo-900 p-6 rounded-xl text-white text-center"><Cloud size={40} className="mx-auto mb-2"/><h4 className="text-lg font-bold mb-2">Sistema en la Nube</h4><p className="text-white/80 text-sm mb-3">Supabase Auth + Database</p><div className={`inline-flex items-center gap-2 px-4 py-2 rounded-full ${online?'bg-emerald-500':'bg-red-500'}`}>{online?<><Wifi size={16}/>Conectado</>:<><WifiOff size={16}/>Offline</>}</div><p className="text-white/60 text-[10px] mt-3">v3.9 • Configuración de clínica</p></div>}
+        {tab==='info'&&<div className="bg-gradient-to-br from-slate-800 to-indigo-900 p-6 rounded-xl text-white text-center"><Cloud size={40} className="mx-auto mb-2"/><h4 className="text-lg font-bold mb-2">Sistema en la Nube</h4><p className="text-white/80 text-sm mb-3">Supabase Auth + Database</p><div className={`inline-flex items-center gap-2 px-4 py-2 rounded-full ${online?'bg-emerald-500':'bg-red-500'}`}>{online?<><Wifi size={16}/>Conectado</>:<><WifiOff size={16}/>Offline</>}</div><p className="text-white/60 text-[10px] mt-3">v3.11 • Backup, búsqueda, dashboard, recordatorios</p></div>}
     </div>
 };
 
 // ===== APP PRINCIPAL =====
-const App=()=>{
+// Búsqueda global con modal y atajo de teclado
+const GlobalSearchModal=({onClose,onOpenPatient,onGoTab})=>{
+    const[q,setQ]=useState('');
+    const[results,setResults]=useState({patients:[],treatments:[],evolutions:[],appointments:[],consents:[]});
+    const[searching,setSearching]=useState(false);
+    const inputRef=useRef(null);
+    const debounceRef=useRef(null);
+
+    useEffect(()=>{setTimeout(()=>inputRef.current?.focus(),50)},[]);
+
+    useEffect(()=>{
+        clearTimeout(debounceRef.current);
+        if(!q||q.trim().length<2){setResults({patients:[],treatments:[],evolutions:[],appointments:[],consents:[]});return}
+        debounceRef.current=setTimeout(async()=>{
+            setSearching(true);
+            try{
+                const term=q.trim().toLowerCase();
+                const[pts,trs,hist,apps,cons]=await Promise.all([
+                    DB.getAll('patients',{notDeleted:true}),
+                    DB.getAll('treatments',{notDeleted:true}),
+                    DB.getAll('history',{notDeleted:true}),
+                    DB.getAll('appointments',{notDeleted:true}),
+                    DB.getAll('consent_records',{notDeleted:true})
+                ]);
+                const matchStr=s=>(s||'').toLowerCase().includes(term);
+                const patientsR=pts.filter(p=>matchStr(p.nombre)||matchStr(p.ci)||matchStr(p.telefono)||matchStr(p.email)||matchStr(p.direccion)).slice(0,15);
+                const ptMap=Object.fromEntries(pts.map(p=>[p.id,p]));
+                const treatmentsR=trs.filter(t=>matchStr(t.descripcion)).slice(0,15).map(t=>({...t,patient:ptMap[t.paciente_id]}));
+                const evolR=hist.filter(h=>h.tipo==='EVOLUCION'&&matchStr(h.motivo)).slice(0,15).map(h=>({...h,patient:ptMap[h.paciente_id]}));
+                const appsR=apps.filter(a=>matchStr(a.tratamiento)||matchStr(a.odontologo)||matchStr(a.fecha)).slice(0,15).map(a=>({...a,patient:ptMap[a.paciente_id]}));
+                const consR=cons.filter(c=>matchStr(c.contenido_generado)).slice(0,10).map(c=>({...c,patient:ptMap[c.paciente_id]}));
+                setResults({patients:patientsR,treatments:treatmentsR,evolutions:evolR,appointments:appsR,consents:consR});
+            }finally{setSearching(false)}
+        },250);
+        return()=>clearTimeout(debounceRef.current);
+    },[q]);
+
+    // Atajo: Escape para cerrar
+    useEffect(()=>{
+        const onKey=e=>{if(e.key==='Escape')onClose()};
+        document.addEventListener('keydown',onKey);
+        return()=>document.removeEventListener('keydown',onKey);
+    },[]);
+
+    const totalResults=results.patients.length+results.treatments.length+results.evolutions.length+results.appointments.length+results.consents.length;
+    const goPatient=p=>{onOpenPatient(p.id);onClose()};
+
+    // Resaltado del término en el texto
+    const highlight=(text,term)=>{
+        if(!text)return null;
+        const idx=text.toLowerCase().indexOf(term.toLowerCase());
+        if(idx===-1)return text;
+        return<>{text.slice(0,idx)}<mark className="bg-amber-200 dark:bg-amber-700/60 text-inherit px-0.5">{text.slice(idx,idx+term.length)}</mark>{text.slice(idx+term.length)}</>;
+    };
+
+    return<Portal><div className="fixed inset-0 bg-black/60 z-[300] flex items-start justify-center p-2 sm:p-4 sm:pt-[5vh]" onClick={onClose}>
+        <div className="bg-white dark:bg-slate-800 w-full sm:max-w-2xl rounded-2xl flex flex-col animate-fade-in" style={{maxHeight:'90vh'}} onClick={e=>e.stopPropagation()}>
+            <div className="p-3 border-b border-slate-200 dark:border-slate-700 shrink-0 flex items-center gap-2">
+                <Search size={18} className="text-slate-400 shrink-0"/>
+                <input ref={inputRef} type="text" value={q} onChange={e=>setQ(e.target.value)} placeholder="Buscar pacientes, tratamientos, evoluciones, citas..." className="flex-1 bg-transparent outline-none text-sm py-2"/>
+                {searching&&<RefreshCw size={14} className="animate-spin text-slate-400"/>}
+                <kbd className="hidden sm:block text-[9px] bg-slate-100 dark:bg-slate-700 px-1.5 py-0.5 rounded border border-slate-200 dark:border-slate-600 text-slate-500 dark:text-slate-400">ESC</kbd>
+                <button onClick={onClose} className="p-1"><X size={18} className="text-slate-400"/></button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto min-h-0">
+                {q.trim().length<2?<div className="p-8 text-center text-slate-400 text-xs">
+                    <Search size={32} className="mx-auto mb-2 opacity-30"/>
+                    <p>Escriba al menos 2 caracteres para buscar</p>
+                    <p className="text-[10px] mt-1">Busca en pacientes, tratamientos, evoluciones, citas y consentimientos</p>
+                </div>:totalResults===0&&!searching?<div className="p-8 text-center text-slate-400 text-xs">
+                    <p>Sin resultados para "<strong>{q}</strong>"</p>
+                </div>:<div className="divide-y divide-slate-200 dark:divide-slate-700">
+                    {results.patients.length>0&&<div className="p-3">
+                        <p className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase mb-2 flex items-center gap-1"><Users size={11}/>Pacientes ({results.patients.length})</p>
+                        <div className="space-y-1">
+                            {results.patients.map(p=><button key={p.id} onClick={()=>goPatient(p)} className="w-full text-left p-2 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700/40 flex items-center gap-2">
+                                <div className="w-7 h-7 rounded-full bg-gradient-to-br from-brand-500 to-indigo-600 flex items-center justify-center text-white font-bold text-xs shrink-0">{(p.nombre||'?').charAt(0).toUpperCase()}</div>
+                                <div className="min-w-0 flex-1">
+                                    <p className="text-xs font-bold truncate">{highlight(p.nombre,q)}</p>
+                                    <p className="text-[10px] text-slate-500 dark:text-slate-400 truncate">CI {highlight(formatCI(p.ci)||'',q)}{p.telefono?` · ${p.telefono}`:''}</p>
+                                </div>
+                            </button>)}
+                        </div>
+                    </div>}
+
+                    {results.treatments.length>0&&<div className="p-3">
+                        <p className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase mb-2 flex items-center gap-1"><CreditCard size={11}/>Tratamientos ({results.treatments.length})</p>
+                        <div className="space-y-1">
+                            {results.treatments.map(t=><button key={t.id} onClick={()=>t.patient&&goPatient(t.patient)} className="w-full text-left p-2 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700/40">
+                                <p className="text-xs font-bold truncate">{highlight(t.descripcion,q)}</p>
+                                <p className="text-[10px] text-slate-500 dark:text-slate-400 truncate">{t.patient?.nombre||'Paciente desconocido'} · {t.estado}</p>
+                            </button>)}
+                        </div>
+                    </div>}
+
+                    {results.evolutions.length>0&&<div className="p-3">
+                        <p className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase mb-2 flex items-center gap-1"><FileText size={11}/>Evoluciones ({results.evolutions.length})</p>
+                        <div className="space-y-1">
+                            {results.evolutions.map(h=><button key={h.id} onClick={()=>h.patient&&goPatient(h.patient)} className="w-full text-left p-2 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700/40">
+                                <p className="text-xs line-clamp-2">{highlight(h.motivo,q)}</p>
+                                <p className="text-[10px] text-slate-500 dark:text-slate-400 truncate">{h.patient?.nombre||'?'} · {h.fecha} · Dr. {h.odontologo}</p>
+                            </button>)}
+                        </div>
+                    </div>}
+
+                    {results.appointments.length>0&&<div className="p-3">
+                        <p className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase mb-2 flex items-center gap-1"><Calendar size={11}/>Citas ({results.appointments.length})</p>
+                        <div className="space-y-1">
+                            {results.appointments.map(a=><button key={a.id} onClick={()=>a.patient&&goPatient(a.patient)} className="w-full text-left p-2 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700/40">
+                                <p className="text-xs font-bold truncate">{a.fecha} · {a.hora} · {a.patient?.nombre||'?'}</p>
+                                <p className="text-[10px] text-slate-500 dark:text-slate-400 truncate">{a.tratamiento?highlight(a.tratamiento,q):'Sin tratamiento'} · Dr. {a.odontologo}</p>
+                            </button>)}
+                        </div>
+                    </div>}
+
+                    {results.consents.length>0&&<div className="p-3">
+                        <p className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase mb-2 flex items-center gap-1"><ClipboardList size={11}/>Consentimientos ({results.consents.length})</p>
+                        <div className="space-y-1">
+                            {results.consents.map(c=><button key={c.id} onClick={()=>c.patient&&goPatient(c.patient)} className="w-full text-left p-2 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700/40">
+                                <p className="text-xs font-bold truncate">{c.patient?.nombre||'?'} · {c.fecha_emision||c.created_at?.slice(0,10)||''}</p>
+                                <p className="text-[10px] text-slate-500 dark:text-slate-400 line-clamp-2">{c.contenido_generado?.slice(0,150)}...</p>
+                            </button>)}
+                        </div>
+                    </div>}
+                </div>}
+            </div>
+        </div>
+    </div></Portal>;
+};
+
+// Modal recordatorio de backup
+const BACKUP_KEY='artedental_last_backup';
+const BACKUP_INTERVAL_DAYS=7;
+const daysSinceBackup=()=>{try{const t=localStorage.getItem(BACKUP_KEY);if(!t)return Infinity;return Math.floor((Date.now()-parseInt(t))/(1000*60*60*24))}catch{return Infinity}};
+const markBackupDone=()=>{try{localStorage.setItem(BACKUP_KEY,Date.now().toString())}catch{}};
+
+const BackupReminderModal=({onClose,onLater})=>{
+    const days=daysSinceBackup();
+    const[downloading,setDownloading]=useState(false);
+    const download=async()=>{
+        setDownloading(true);
+        try{
+            const d=await S.export();
+            const b=new Blob([d],{type:'application/json'});
+            const u=URL.createObjectURL(b);
+            const a=document.createElement('a');
+            a.href=u;a.download='ArteDental_Backup_'+new Date().toISOString().split('T')[0]+'.json';a.click();
+            setTimeout(()=>URL.revokeObjectURL(u),1000);
+            markBackupDone();
+            toast.ok('Backup descargado. Guardalo en un lugar seguro.');
+            onClose();
+        }finally{setDownloading(false)}
+    };
+    const skipForWeek=()=>{markBackupDone();onLater()}; // marca como hecho aunque no descargue, para no molestar
+    return<Portal><div className="fixed inset-0 bg-black/70 z-[300] flex items-center justify-center p-4" onClick={onLater}>
+        <div className="bg-white dark:bg-slate-800 max-w-md w-full rounded-2xl p-6 animate-fade-in" onClick={e=>e.stopPropagation()}>
+            <div className="flex items-start gap-3 mb-3">
+                <div className="bg-amber-100 dark:bg-amber-900/40 p-3 rounded-full"><AlertTriangle size={24} className="text-amber-600 dark:text-amber-400"/></div>
+                <div className="flex-1">
+                    <h3 className="font-bold text-base">Hora de hacer un backup</h3>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">{days===Infinity?'Nunca hiciste un backup':`Hace ${days} día${days!==1?'s':''} sin backup`}</p>
+                </div>
+            </div>
+            <div className="bg-slate-50 dark:bg-slate-900/40 rounded-lg p-3 text-xs space-y-1.5 mb-4">
+                <p className="text-slate-600 dark:text-slate-300">El backup descarga un archivo JSON con <strong>todos los datos</strong>: pacientes, citas, fichas, odontogramas, tratamientos, fotos y consentimientos.</p>
+                <p className="text-slate-500 dark:text-slate-400 text-[10px]">💡 Guardalo en Google Drive, Dropbox, un pendrive o varios lugares. Si algo le pasa al sistema, podés restaurarlo desde Sistema → Backup → Cargar.</p>
+            </div>
+            <div className="flex flex-col gap-2">
+                <Btn onClick={download} disabled={downloading} className="w-full py-2.5 text-sm">
+                    {downloading?<><RefreshCw size={14} className="inline animate-spin mr-2"/>Descargando...</>:<><Download size={14} className="inline mr-2"/>Descargar backup ahora</>}
+                </Btn>
+                <button onClick={skipForWeek} className="text-xs text-slate-500 dark:text-slate-400 hover:underline py-2">Recordar la semana que viene</button>
+            </div>
+        </div>
+    </div></Portal>;
+};
+
+
     const[user,setUser]=useState(null);
     const[tab,setTab]=useState('dashboard');
     const[pid,setPid]=useState(null);
     const[loading,setLoading]=useState(true);
     const[online,setOnline]=useState(false);
     const[showPass,setShowPass]=useState(false);
+    const[showSearch,setShowSearch]=useState(false);
+    const[showBackup,setShowBackup]=useState(false);
     const[dark,toggleDark]=useTheme();
 
     useEffect(()=>{(async()=>{
@@ -2486,6 +3030,18 @@ const App=()=>{
         if(ok){const u=await S.getCurrentUser();if(u)setUser(u)}
         setLoading(false);
     })()},[]);
+
+    // Mostrar recordatorio de backup si pasaron BACKUP_INTERVAL_DAYS (solo admin)
+    useEffect(()=>{
+        if(!user)return;
+        if(user.role!==Role.ADMIN)return;
+        const days=daysSinceBackup();
+        if(days>=BACKUP_INTERVAL_DAYS){
+            // Esperar 2 segundos después del login para no abrumar
+            const t=setTimeout(()=>setShowBackup(true),2000);
+            return()=>clearTimeout(t);
+        }
+    },[user]);
 
     useEffect(()=>{const onFocus=async()=>setOnline(await DB.check());window.addEventListener('focus',onFocus);return()=>window.removeEventListener('focus',onFocus)},[]);
 
@@ -2496,6 +3052,16 @@ const App=()=>{
         const events=['mousedown','keydown','touchstart','scroll'];
         events.forEach(e=>window.addEventListener(e,reset));reset();
         return()=>{clearTimeout(timer);events.forEach(e=>window.removeEventListener(e,reset))};
+    },[user]);
+
+    // Atajo Ctrl+K / Cmd+K para abrir búsqueda
+    useEffect(()=>{
+        if(!user)return;
+        const onKey=e=>{
+            if((e.ctrlKey||e.metaKey)&&e.key==='k'){e.preventDefault();setShowSearch(true)}
+        };
+        document.addEventListener('keydown',onKey);
+        return()=>document.removeEventListener('keydown',onKey);
     },[user]);
 
     const logout=async()=>{await supabase.auth.signOut();setUser(null);setPid(null);toast.ok('Sesión cerrada')};
@@ -2522,6 +3088,7 @@ const App=()=>{
                 <div className="flex items-center gap-2"><span className="text-xl">🦷</span><span className="font-bold">Arte Dental</span></div>
                 <div className="flex items-center gap-2">
                     <Status on={online}/>
+                    <button onClick={()=>setShowSearch(true)} className="p-2 bg-slate-700 dark:bg-slate-800 rounded-lg hover:bg-slate-600" title="Búsqueda global"><Search size={16}/></button>
                     <button onClick={toggleDark} className="p-2 bg-slate-700 dark:bg-slate-800 rounded-lg hover:bg-slate-600" title={dark?'Tema claro':'Tema oscuro'}>{dark?<Sun size={16}/>:<Moon size={16}/>}</button>
                     <button onClick={()=>setShowPass(true)} className="p-2 bg-slate-700 dark:bg-slate-800 rounded-lg hover:bg-slate-600" title="Cambiar contraseña"><Key size={16}/></button>
                     <button onClick={logout} className="p-2 bg-slate-700 dark:bg-slate-800 rounded-lg hover:bg-slate-600" title="Cerrar sesión"><LogOut size={16}/></button>
@@ -2541,7 +3108,9 @@ const App=()=>{
             {tab==='admin'&&<Admin user={user} online={online} onUserUpdated={u=>setUser({...user,...u})}/>}
         </main>
 
-        <footer className="p-2 text-center text-[10px] text-slate-400 no-print safe-bottom">Arte Dental © 2025 • v3.9 • {online?'🟢':'🔴'}</footer>
+        <footer className="p-2 text-center text-[10px] text-slate-400 no-print safe-bottom">Arte Dental © 2025 • v3.11 • {online?'🟢':'🔴'}</footer>
+        {showBackup&&<BackupReminderModal onClose={()=>setShowBackup(false)} onLater={()=>setShowBackup(false)}/>}
+        {showSearch&&<GlobalSearchModal onClose={()=>setShowSearch(false)} onOpenPatient={openPatient} onGoTab={goTab}/>}
     </div>
 };
 
