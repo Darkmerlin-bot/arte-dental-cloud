@@ -580,13 +580,13 @@ const DayView=({date,setDate,apps,pts,users,cond,user,drFilter,onReload})=>{
                     const past=slotDate<now;
                     const occupied=slotApps.length>0;
                     return<button key={time} onClick={()=>{if(past&&!occupied)return toast.warn('Esa hora ya pasó');setSlot({date,time,dr:drFilter,apps:slotApps})}} className={`w-full flex items-stretch text-left hover:bg-slate-50 dark:hover:bg-slate-700/30 transition-colors ${past?'opacity-60':''} ${past&&!occupied?'cursor-not-allowed':''}`}>
-                        <div className={`w-14 shrink-0 flex items-center justify-center text-xs font-bold border-r border-slate-200 dark:border-slate-700 ${occupied?'bg-brand-50 dark:bg-brand-900/30 text-brand-700 dark:text-brand-300':'bg-slate-50 dark:bg-slate-900/50 text-slate-500 dark:text-slate-400'}`}>{time}</div>
-                        <div className="flex-1 p-2 min-h-[3rem]">
-                            {slotApps.length===0?<span className="text-[10px] text-slate-300 dark:text-slate-600 italic">{past?'Hora pasada':'Libre — tap para agendar'}</span>
-                            :<div className="space-y-1">{slotApps.map(a=><div key={a.id} className={`px-2 py-1 rounded text-xs flex items-center justify-between gap-2 ${a.asistio===true?'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-800 dark:text-emerald-300':a.asistio===false?'bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-300':cond[a.paciente_id]?'bg-pink-100 dark:bg-pink-900/30 text-pink-800 dark:text-pink-300':'bg-brand-100 dark:bg-brand-900/40 text-brand-800 dark:text-brand-200'}`}>
-                                <div className="min-w-0 flex-1"><p className="font-bold truncate">{a.paciente_nombre}{cond[a.paciente_id]&&<HeartPulse size={10} className="text-pink-500 inline ml-1"/>}</p><p className="text-[9px] opacity-80 truncate">Dr. {a.odontologo}</p></div>
-                                {a.asistio===true&&<UserCheck size={12} className="shrink-0"/>}
-                                {a.asistio===false&&<UserX size={12} className="shrink-0"/>}
+                        <div className={`w-12 shrink-0 flex items-center justify-center text-[10px] font-bold border-r border-slate-200 dark:border-slate-700 ${occupied?'bg-brand-50 dark:bg-brand-900/30 text-brand-700 dark:text-brand-300':'bg-slate-50 dark:bg-slate-900/50 text-slate-500 dark:text-slate-400'}`}>{time}</div>
+                        <div className="flex-1 px-2 py-1 min-h-[1.75rem] flex items-center">
+                            {slotApps.length===0?<span className="text-[10px] text-slate-300 dark:text-slate-600 italic">{past?'—':'Libre'}</span>
+                            :<div className="space-y-0.5 w-full">{slotApps.map(a=><div key={a.id} className={`px-1.5 py-0.5 rounded text-[11px] flex items-center justify-between gap-2 ${a.asistio===true?'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-800 dark:text-emerald-300':a.asistio===false?'bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-300':cond[a.paciente_id]?'bg-pink-100 dark:bg-pink-900/30 text-pink-800 dark:text-pink-300':'bg-brand-100 dark:bg-brand-900/40 text-brand-800 dark:text-brand-200'}`}>
+                                <div className="min-w-0 flex-1 flex items-center gap-1.5"><span className="font-bold truncate">{a.paciente_nombre}</span>{cond[a.paciente_id]&&<HeartPulse size={9} className="text-pink-500 shrink-0"/>}<span className="text-[9px] opacity-70 truncate">· {a.odontologo}</span></div>
+                                {a.asistio===true&&<UserCheck size={11} className="shrink-0"/>}
+                                {a.asistio===false&&<UserX size={11} className="shrink-0"/>}
                             </div>)}</div>}
                         </div>
                     </button>
@@ -2510,13 +2510,13 @@ const PatientsList=({user,onOpen})=>{
         </Card>}
         <Card className="overflow-hidden">
             <div className="p-3 border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/50"><div className="relative"><Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" size={14}/><Input placeholder="Buscar nombre o CI..." value={search} onChange={e=>setSearch(e.target.value)} className="pl-8 py-2"/></div></div>
-            <div className="divide-y divide-slate-200 dark:divide-slate-700 max-h-[60vh] overflow-auto">
-                {filtered.map(p=><button key={p.id} onClick={()=>onOpen(p.id)} className={`w-full p-3 text-left hover:bg-slate-50 dark:hover:bg-slate-700/30 transition-colors ${cond[p.id]?'border-l-4 border-pink-500 bg-pink-50/50 dark:bg-pink-900/10':''}`}>
+            <div className="divide-y divide-slate-200 dark:divide-slate-700 max-h-[70vh] overflow-auto">
+                {filtered.map(p=><button key={p.id} onClick={()=>onOpen(p.id)} className={`w-full px-3 py-2 text-left hover:bg-slate-50 dark:hover:bg-slate-700/30 transition-colors ${cond[p.id]?'border-l-4 border-pink-500 bg-pink-50/50 dark:bg-pink-900/10':''}`}>
                     <div className="flex justify-between items-center gap-2">
-                        <div className="min-w-0 flex-1"><p className="font-bold text-sm truncate">{p.nombre}{cond[p.id]&&<span className="ml-1 bg-pink-500 text-white text-[8px] px-1.5 py-0.5 rounded-full">⚠️</span>}</p><p className="text-[10px] text-slate-400">CI: {formatCI(p.ci)} • Tel: {p.telefono||'-'}</p></div>
-                        <div className="flex gap-1 shrink-0">
-                            <span onClick={e=>editPatient(p,e)} className="p-2 text-brand-500 hover:bg-brand-50 dark:hover:bg-brand-900/30 rounded cursor-pointer"><Edit2 size={14}/></span>
-                            <span onClick={e=>delPatient(p,e)} className="p-2 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30 rounded cursor-pointer"><Trash2 size={14}/></span>
+                        <div className="min-w-0 flex-1"><p className="font-bold text-xs truncate">{p.nombre}{cond[p.id]&&<HeartPulse size={10} className="inline ml-1 text-pink-500"/>}</p><p className="text-[10px] text-slate-400 truncate">CI {formatCI(p.ci)}{p.telefono?` · ${p.telefono}`:''}</p></div>
+                        <div className="flex gap-0.5 shrink-0">
+                            <span onClick={e=>editPatient(p,e)} className="p-1.5 text-brand-500 hover:bg-brand-50 dark:hover:bg-brand-900/30 rounded cursor-pointer"><Edit2 size={12}/></span>
+                            <span onClick={e=>delPatient(p,e)} className="p-1.5 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30 rounded cursor-pointer"><Trash2 size={12}/></span>
                         </div>
                     </div>
                 </button>)}
@@ -2818,20 +2818,38 @@ const Admin=({user,online,onUserUpdated})=>{
         </div>}
 
         {tab==='backup'&&<div className="space-y-4">
-            {(()=>{const d=daysSinceBackup();const ok=d<BACKUP_INTERVAL_DAYS;return<Card className={`p-3 border-l-4 ${ok?'border-l-emerald-500 bg-emerald-50/30 dark:bg-emerald-900/10':'border-l-amber-500 bg-amber-50/30 dark:bg-amber-900/10'}`}>
-                <div className="flex items-center gap-2 text-xs">
-                    {ok?<CheckCircle2 size={16} className="text-emerald-500 shrink-0"/>:<AlertTriangle size={16} className="text-amber-500 shrink-0"/>}
-                    <div>
-                        <p className="font-bold">{d===Infinity?'Nunca hiciste backup':d===0?'Backup hecho hoy':`Último backup hace ${d} día${d!==1?'s':''}`}</p>
-                        <p className="text-[10px] text-slate-500 dark:text-slate-400">Recordatorio cada {BACKUP_INTERVAL_DAYS} días</p>
+            {(()=>{
+                const d=daysSinceBackup();
+                const next=getNextBackupDate();
+                const today=todayStr();
+                const ok=d<14;
+                const upcoming=next&&next>today;
+                const pending=next&&next<=today;
+                return<><Card className={`p-3 border-l-4 ${ok?'border-l-emerald-500 bg-emerald-50/30 dark:bg-emerald-900/10':'border-l-amber-500 bg-amber-50/30 dark:bg-amber-900/10'}`}>
+                    <div className="flex items-center gap-2 text-xs">
+                        {ok?<CheckCircle2 size={16} className="text-emerald-500 shrink-0"/>:<AlertTriangle size={16} className="text-amber-500 shrink-0"/>}
+                        <div>
+                            <p className="font-bold">{d===Infinity?'Nunca hiciste backup':d===0?'Backup hecho hoy':`Último backup hace ${d} día${d!==1?'s':''}`}</p>
+                            {next?<p className="text-[10px] text-slate-500 dark:text-slate-400">{pending?`⏰ Recordatorio pendiente desde ${new Date(next+'T00:00').toLocaleDateString('es-UY')}`:`Próximo recordatorio: ${new Date(next+'T00:00').toLocaleDateString('es-UY')}`}</p>
+                            :<p className="text-[10px] text-slate-500 dark:text-slate-400">Sin recordatorio programado</p>}
+                        </div>
                     </div>
-                </div>
-            </Card>})()}
-            <Card className="p-6 text-center"><Download size={32} className="mx-auto text-brand-600 dark:text-brand-400 mb-2"/><h4 className="font-bold mb-2">Exportar</h4><p className="text-[10px] text-slate-400 mb-3">Pacientes, citas, historial, fichas, fotos, tratamientos, consentimientos, configuración</p><Btn onClick={async()=>{const d=await S.export();const b=new Blob([d],{type:'application/json'});const u=URL.createObjectURL(b);const a=document.createElement('a');a.href=u;a.download='ArteDental_Backup_'+new Date().toISOString().split('T')[0]+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(u),1000);markBackupDone();toast.ok('Backup descargado')}} className="w-full py-3 text-sm">Descargar backup</Btn></Card>
+                </Card>
+                <Card className="p-3">
+                    <p className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase mb-2">📅 Programar próximo recordatorio</p>
+                    <div className="flex gap-2 items-center">
+                        <Input type="date" min={today} value={next||''} onChange={e=>{setNextBackupDate(e.target.value);toast.ok('Fecha guardada')}} className="flex-1"/>
+                        {next&&<Btn variant="secondary" onClick={()=>{setNextBackupDate('');toast.ok('Recordatorio desactivado')}} className="text-xs px-3 py-2">✕</Btn>}
+                    </div>
+                    <p className="text-[9px] text-slate-400 mt-1.5">El recordatorio aparece UNA vez ese día. Dejá vacío para desactivar.</p>
+                </Card>
+                </>;
+            })()}
+            <Card className="p-6 text-center"><Download size={32} className="mx-auto text-brand-600 dark:text-brand-400 mb-2"/><h4 className="font-bold mb-2">Exportar</h4><p className="text-[10px] text-slate-400 mb-3">Pacientes, citas, historial, fichas, fotos, tratamientos, consentimientos, configuración</p><Btn onClick={async()=>{const d=await S.export();const b=new Blob([d],{type:'application/json'});const u=URL.createObjectURL(b);const a=document.createElement('a');a.href=u;a.download='ArteDental_Backup_'+todayStr()+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(u),1000);markBackupDone();toast.ok('Backup descargado')}} className="w-full py-3 text-sm">Descargar backup</Btn></Card>
             <Card className="p-6 text-center"><Upload size={32} className="mx-auto text-emerald-600 dark:text-emerald-400 mb-2"/><h4 className="font-bold mb-2">Importar</h4><p className="text-[10px] text-slate-400 mb-3">⚠️ Esto puede sobrescribir datos. Hacé backup antes.</p><input type="file" ref={fileRef} accept=".json" className="hidden" onChange={async e=>{const f=e.target.files[0];if(!f)return;if(!confirm('¿Cargar este backup? Los datos actuales pueden ser sobrescritos.'))return;const r=new FileReader();r.onload=async ev=>{if(await S.import(ev.target.result)){toast.ok('Importado, recargando...');setTimeout(()=>window.location.reload(),1500)}};r.readAsText(f)}}/><Btn variant="success" onClick={()=>fileRef.current.click()} className="w-full py-3 text-sm">Cargar backup</Btn></Card>
         </div>}
 
-        {tab==='info'&&<div className="bg-gradient-to-br from-slate-800 to-indigo-900 p-6 rounded-xl text-white text-center"><Cloud size={40} className="mx-auto mb-2"/><h4 className="text-lg font-bold mb-2">Sistema en la Nube</h4><p className="text-white/80 text-sm mb-3">Supabase Auth + Database</p><div className={`inline-flex items-center gap-2 px-4 py-2 rounded-full ${online?'bg-emerald-500':'bg-red-500'}`}>{online?<><Wifi size={16}/>Conectado</>:<><WifiOff size={16}/>Offline</>}</div><p className="text-white/60 text-[10px] mt-3">v3.11 • Backup, búsqueda, dashboard, recordatorios</p></div>}
+        {tab==='info'&&<div className="bg-gradient-to-br from-slate-800 to-indigo-900 p-6 rounded-xl text-white text-center"><Cloud size={40} className="mx-auto mb-2"/><h4 className="text-lg font-bold mb-2">Sistema en la Nube</h4><p className="text-white/80 text-sm mb-3">Supabase Auth + Database</p><div className={`inline-flex items-center gap-2 px-4 py-2 rounded-full ${online?'bg-emerald-500':'bg-red-500'}`}>{online?<><Wifi size={16}/>Conectado</>:<><WifiOff size={16}/>Offline</>}</div><p className="text-white/60 text-[10px] mt-3">v3.12 • Backup programable + filas compactas</p></div>}
     </div>
 };
 
@@ -2967,15 +2985,32 @@ const GlobalSearchModal=({onClose,onOpenPatient,onGoTab})=>{
     </div></Portal>;
 };
 
-// Modal recordatorio de backup
-const BACKUP_KEY='artedental_last_backup';
-const BACKUP_INTERVAL_DAYS=7;
-const daysSinceBackup=()=>{try{const t=localStorage.getItem(BACKUP_KEY);if(!t)return Infinity;return Math.floor((Date.now()-parseInt(t))/(1000*60*60*24))}catch{return Infinity}};
-const markBackupDone=()=>{try{localStorage.setItem(BACKUP_KEY,Date.now().toString())}catch{}};
+// Backup programable: el admin define la próxima fecha de recordatorio
+const BACKUP_NEXT_KEY='artedental_backup_next';     // fecha YYYY-MM-DD del próximo recordatorio
+const BACKUP_LAST_KEY='artedental_last_backup';      // timestamp del último backup hecho
+const BACKUP_SHOWN_KEY='artedental_backup_shown';    // fecha YYYY-MM-DD del último día que se mostró (para no repetir)
 
-const BackupReminderModal=({onClose,onLater})=>{
+const todayStr=()=>new Date().toISOString().split('T')[0];
+const getNextBackupDate=()=>{try{return localStorage.getItem(BACKUP_NEXT_KEY)||''}catch{return''}};
+const setNextBackupDate=(d)=>{try{localStorage.setItem(BACKUP_NEXT_KEY,d)}catch{}};
+const daysSinceBackup=()=>{try{const t=localStorage.getItem(BACKUP_LAST_KEY);if(!t)return Infinity;return Math.floor((Date.now()-parseInt(t))/(1000*60*60*24))}catch{return Infinity}};
+const markBackupDone=()=>{try{localStorage.setItem(BACKUP_LAST_KEY,Date.now().toString())}catch{}};
+const shouldShowReminder=()=>{
+    const next=getNextBackupDate();
+    if(!next)return false; // si nunca se programó, no molestar
+    if(next>todayStr())return false; // todavía no llegó el día
+    try{const shown=localStorage.getItem(BACKUP_SHOWN_KEY);if(shown===todayStr())return false}catch{}
+    return true;
+};
+const markReminderShown=()=>{try{localStorage.setItem(BACKUP_SHOWN_KEY,todayStr())}catch{}};
+
+const BackupReminderModal=({onClose})=>{
     const days=daysSinceBackup();
     const[downloading,setDownloading]=useState(false);
+    // Por defecto sugerir 30 días después de hoy
+    const defaultNext=(()=>{const d=new Date();d.setDate(d.getDate()+30);return d.toISOString().split('T')[0]})();
+    const[nextDate,setNextDate]=useState(defaultNext);
+
     const download=async()=>{
         setDownloading(true);
         try{
@@ -2983,37 +3018,52 @@ const BackupReminderModal=({onClose,onLater})=>{
             const b=new Blob([d],{type:'application/json'});
             const u=URL.createObjectURL(b);
             const a=document.createElement('a');
-            a.href=u;a.download='ArteDental_Backup_'+new Date().toISOString().split('T')[0]+'.json';a.click();
+            a.href=u;a.download='ArteDental_Backup_'+todayStr()+'.json';a.click();
             setTimeout(()=>URL.revokeObjectURL(u),1000);
             markBackupDone();
-            toast.ok('Backup descargado. Guardalo en un lugar seguro.');
+            setNextBackupDate(nextDate);
+            markReminderShown();
+            toast.ok('Backup descargado. Próximo recordatorio: '+new Date(nextDate+'T00:00').toLocaleDateString('es-UY'));
             onClose();
         }finally{setDownloading(false)}
     };
-    const skipForWeek=()=>{markBackupDone();onLater()}; // marca como hecho aunque no descargue, para no molestar
-    return<Portal><div className="fixed inset-0 bg-black/70 z-[300] flex items-center justify-center p-4" onClick={onLater}>
+
+    const postpone=()=>{
+        setNextBackupDate(nextDate);
+        markReminderShown();
+        toast.ok('Próximo recordatorio: '+new Date(nextDate+'T00:00').toLocaleDateString('es-UY'));
+        onClose();
+    };
+
+    const dismissToday=()=>{markReminderShown();onClose()};
+
+    return<Portal><div className="fixed inset-0 bg-black/70 z-[300] flex items-center justify-center p-4" onClick={dismissToday}>
         <div className="bg-white dark:bg-slate-800 max-w-md w-full rounded-2xl p-6 animate-fade-in" onClick={e=>e.stopPropagation()}>
             <div className="flex items-start gap-3 mb-3">
                 <div className="bg-amber-100 dark:bg-amber-900/40 p-3 rounded-full"><AlertTriangle size={24} className="text-amber-600 dark:text-amber-400"/></div>
                 <div className="flex-1">
-                    <h3 className="font-bold text-base">Hora de hacer un backup</h3>
-                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">{days===Infinity?'Nunca hiciste un backup':`Hace ${days} día${days!==1?'s':''} sin backup`}</p>
+                    <h3 className="font-bold text-base">Recordatorio de backup</h3>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">{days===Infinity?'Nunca hiciste un backup':`Último backup hace ${days} día${days!==1?'s':''}`}</p>
                 </div>
             </div>
-            <div className="bg-slate-50 dark:bg-slate-900/40 rounded-lg p-3 text-xs space-y-1.5 mb-4">
-                <p className="text-slate-600 dark:text-slate-300">El backup descarga un archivo JSON con <strong>todos los datos</strong>: pacientes, citas, fichas, odontogramas, tratamientos, fotos y consentimientos.</p>
-                <p className="text-slate-500 dark:text-slate-400 text-[10px]">💡 Guardalo en Google Drive, Dropbox, un pendrive o varios lugares. Si algo le pasa al sistema, podés restaurarlo desde Sistema → Backup → Cargar.</p>
+            <div className="bg-slate-50 dark:bg-slate-900/40 rounded-lg p-3 text-xs mb-3">
+                <p className="text-slate-600 dark:text-slate-300">El backup descarga un archivo con todos los datos. Guardalo en Drive, pendrive o varios lugares.</p>
+            </div>
+            <div className="mb-4">
+                <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 mb-1 block">Próximo recordatorio (después de hoy):</label>
+                <Input type="date" min={todayStr()} value={nextDate} onChange={e=>setNextDate(e.target.value)}/>
             </div>
             <div className="flex flex-col gap-2">
                 <Btn onClick={download} disabled={downloading} className="w-full py-2.5 text-sm">
-                    {downloading?<><RefreshCw size={14} className="inline animate-spin mr-2"/>Descargando...</>:<><Download size={14} className="inline mr-2"/>Descargar backup ahora</>}
+                    {downloading?<><RefreshCw size={14} className="inline animate-spin mr-2"/>Descargando...</>:<><Download size={14} className="inline mr-2"/>Descargar y reprogramar</>}
                 </Btn>
-                <button onClick={skipForWeek} className="text-xs text-slate-500 dark:text-slate-400 hover:underline py-2">Recordar la semana que viene</button>
+                <Btn variant="secondary" onClick={postpone} className="w-full py-2 text-xs">Solo reprogramar (no descargar ahora)</Btn>
+                <button onClick={dismissToday} className="text-[11px] text-slate-500 dark:text-slate-400 hover:underline py-1">Cerrar (volverá a aparecer mañana)</button>
             </div>
         </div>
     </div></Portal>;
 };
-const App = () => {
+
 
     const[user,setUser]=useState(null);
     const[tab,setTab]=useState('dashboard');
@@ -3031,13 +3081,11 @@ const App = () => {
         setLoading(false);
     })()},[]);
 
-    // Mostrar recordatorio de backup si pasaron BACKUP_INTERVAL_DAYS (solo admin)
+    // Mostrar recordatorio de backup solo si pasó la fecha programada Y no se mostró hoy (solo admin)
     useEffect(()=>{
         if(!user)return;
         if(user.role!==Role.ADMIN)return;
-        const days=daysSinceBackup();
-        if(days>=BACKUP_INTERVAL_DAYS){
-            // Esperar 2 segundos después del login para no abrumar
+        if(shouldShowReminder()){
             const t=setTimeout(()=>setShowBackup(true),2000);
             return()=>clearTimeout(t);
         }
@@ -3108,8 +3156,8 @@ const App = () => {
             {tab==='admin'&&<Admin user={user} online={online} onUserUpdated={u=>setUser({...user,...u})}/>}
         </main>
 
-        <footer className="p-2 text-center text-[10px] text-slate-400 no-print safe-bottom">Arte Dental © 2025 • v3.11 • {online?'🟢':'🔴'}</footer>
-        {showBackup&&<BackupReminderModal onClose={()=>setShowBackup(false)} onLater={()=>setShowBackup(false)}/>}
+        <footer className="p-2 text-center text-[10px] text-slate-400 no-print safe-bottom">Arte Dental © 2025 • v3.12 • {online?'🟢':'🔴'}</footer>
+        {showBackup&&<BackupReminderModal onClose={()=>setShowBackup(false)}/>}
         {showSearch&&<GlobalSearchModal onClose={()=>setShowSearch(false)} onOpenPatient={openPatient} onGoTab={goTab}/>}
     </div>
 };
