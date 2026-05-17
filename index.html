@@ -13,18 +13,32 @@
     <title>Arte Dental - Sistema en la Nube</title>
     <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%231e293b' width='100' height='100' rx='20'/><text x='50' y='68' text-anchor='middle' font-size='50'>🦷</text></svg>"/>
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🦷</text></svg>"/>
+
+    <!-- Preconnect a todos los CDN: el navegador resuelve DNS y abre conexión TLS en paralelo -->
+    <link rel="preconnect" href="https://cdn.tailwindcss.com" crossorigin/>
+    <link rel="preconnect" href="https://unpkg.com" crossorigin/>
+    <link rel="preconnect" href="https://esm.sh" crossorigin/>
+    <link rel="preconnect" href="https://gffhlahrjwiojdewvxws.supabase.co" crossorigin/>
+    <link rel="preconnect" href="https://fonts.googleapis.com"/>
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+
+    <!-- Preload de los scripts más pesados (descargan en paralelo en lugar de secuencial) -->
+    <link rel="preload" href="https://unpkg.com/@babel/standalone@7.23.5/babel.min.js" as="script"/>
+    <link rel="preload" href="https://unpkg.com/@supabase/supabase-js@2" as="script"/>
+    <link rel="preload" href="https://esm.sh/react@18.2.0" as="script" crossorigin/>
+    <link rel="preload" href="https://esm.sh/react-dom@18.2.0/client" as="script" crossorigin/>
+
     <script>
       // Dark mode: aplicar antes de renderizar para evitar flash
       (function(){try{const t=localStorage.getItem('artedental_theme');if(t==='dark'||!t){document.documentElement.classList.add('dark')}}catch(e){document.documentElement.classList.add('dark')}})();
     </script>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+
+    <!-- Tailwind config ANTES del script de Tailwind para evitar reflow -->
     <script>
-      tailwind.config={
-        darkMode:'class',
-        theme:{extend:{colors:{brand:{50:'#eef2ff',100:'#e0e7ff',200:'#c7d2fe',300:'#a5b4fc',400:'#818cf8',500:'#6366f1',600:'#4f46e5',700:'#4338ca',800:'#3730a3',900:'#312e81'}}}}
-      }
+      tailwind={config:{darkMode:'class',theme:{extend:{colors:{brand:{50:'#eef2ff',100:'#e0e7ff',200:'#c7d2fe',300:'#a5b4fc',400:'#818cf8',500:'#6366f1',600:'#4f46e5',700:'#4338ca',800:'#3730a3',900:'#312e81'}}}}}};
     </script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/@supabase/supabase-js@2" async></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"/>
     <style>
         *{-webkit-tap-highlight-color:transparent;-webkit-touch-callout:none}
@@ -49,12 +63,38 @@
         /* Inputs dark mode */
         .dark input,.dark select,.dark textarea{background-color:#1e293b;color:#f1f5f9;border-color:#334155}
         .dark input::placeholder,.dark textarea::placeholder{color:#64748b}
+        /* Splash screen - se ve INMEDIATO sin esperar React */
+        #splash{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:linear-gradient(135deg,#1e293b 0%,#312e81 100%);color:white;z-index:9999;transition:opacity .3s ease-out}
+        #splash.hidden{opacity:0;pointer-events:none}
+        #splash .logo{font-size:64px;margin-bottom:20px;animation:bounce 1.2s ease-in-out infinite}
+        #splash .spinner{width:40px;height:40px;border:3px solid rgba(255,255,255,.2);border-top-color:#fff;border-radius:50%;animation:spin .8s linear infinite;margin-top:16px}
+        #splash .label{font-family:system-ui,sans-serif;font-size:14px;opacity:.8;margin-top:8px}
+        @keyframes bounce{0%,100%{transform:translateY(0)}50%{transform:translateY(-8px)}}
     </style>
-    <script src="https://unpkg.com/@babel/standalone@7.23.5/babel.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone@7.23.5/babel.min.js" defer></script>
     <script type="importmap">{"imports":{"react":"https://esm.sh/react@18.2.0","react-dom":"https://esm.sh/react-dom@18.2.0","react-dom/client":"https://esm.sh/react-dom@18.2.0/client","lucide-react":"https://esm.sh/lucide-react@0.263.1"}}</script>
 </head>
 <body class="text-slate-800 dark:text-slate-100">
+<!-- Splash inmediato (visible mientras carga Babel/React/Supabase) -->
+<div id="splash"><div class="logo">🦷</div><div style="font-size:20px;font-weight:bold">Arte Dental</div><div class="spinner"></div><div class="label">Cargando sistema...</div></div>
 <div id="root"></div>
+<script>
+  // Ocultar splash cuando el root tenga contenido
+  (function(){
+    const splash=document.getElementById('splash');
+    const root=document.getElementById('root');
+    const obs=new MutationObserver(()=>{
+      if(root.children.length>0){
+        splash.classList.add('hidden');
+        setTimeout(()=>splash.remove(),350);
+        obs.disconnect();
+      }
+    });
+    obs.observe(root,{childList:true});
+    // Safety: ocultar después de 15s pase lo que pase
+    setTimeout(()=>{if(document.getElementById('splash')){splash.classList.add('hidden');setTimeout(()=>splash.remove(),350)}},15000);
+  })();
+</script>
 <script type="text/babel" data-type="module">
 import React,{useState,useEffect,useRef,useMemo} from 'react';
 import {createRoot} from 'react-dom/client';
@@ -2849,7 +2889,7 @@ const Admin=({user,online,onUserUpdated})=>{
             <Card className="p-6 text-center"><Upload size={32} className="mx-auto text-emerald-600 dark:text-emerald-400 mb-2"/><h4 className="font-bold mb-2">Importar</h4><p className="text-[10px] text-slate-400 mb-3">⚠️ Esto puede sobrescribir datos. Hacé backup antes.</p><input type="file" ref={fileRef} accept=".json" className="hidden" onChange={async e=>{const f=e.target.files[0];if(!f)return;if(!confirm('¿Cargar este backup? Los datos actuales pueden ser sobrescritos.'))return;const r=new FileReader();r.onload=async ev=>{if(await S.import(ev.target.result)){toast.ok('Importado, recargando...');setTimeout(()=>window.location.reload(),1500)}};r.readAsText(f)}}/><Btn variant="success" onClick={()=>fileRef.current.click()} className="w-full py-3 text-sm">Cargar backup</Btn></Card>
         </div>}
 
-        {tab==='info'&&<div className="bg-gradient-to-br from-slate-800 to-indigo-900 p-6 rounded-xl text-white text-center"><Cloud size={40} className="mx-auto mb-2"/><h4 className="text-lg font-bold mb-2">Sistema en la Nube</h4><p className="text-white/80 text-sm mb-3">Supabase Auth + Database</p><div className={`inline-flex items-center gap-2 px-4 py-2 rounded-full ${online?'bg-emerald-500':'bg-red-500'}`}>{online?<><Wifi size={16}/>Conectado</>:<><WifiOff size={16}/>Offline</>}</div><p className="text-white/60 text-[10px] mt-3">v3.12 • Backup programable + filas compactas</p></div>}
+        {tab==='info'&&<div className="bg-gradient-to-br from-slate-800 to-indigo-900 p-6 rounded-xl text-white text-center"><Cloud size={40} className="mx-auto mb-2"/><h4 className="text-lg font-bold mb-2">Sistema en la Nube</h4><p className="text-white/80 text-sm mb-3">Supabase Auth + Database</p><div className={`inline-flex items-center gap-2 px-4 py-2 rounded-full ${online?'bg-emerald-500':'bg-red-500'}`}>{online?<><Wifi size={16}/>Conectado</>:<><WifiOff size={16}/>Offline</>}</div><p className="text-white/60 text-[10px] mt-3">v3.13 • Optimizaciones de carga</p></div>}
     </div>
 };
 
@@ -3156,7 +3196,7 @@ const App=()=>{
             {tab==='admin'&&<Admin user={user} online={online} onUserUpdated={u=>setUser({...user,...u})}/>}
         </main>
 
-        <footer className="p-2 text-center text-[10px] text-slate-400 no-print safe-bottom">Arte Dental © 2025 • v3.12 • {online?'🟢':'🔴'}</footer>
+        <footer className="p-2 text-center text-[10px] text-slate-400 no-print safe-bottom">Arte Dental © 2025 • v3.13 • {online?'🟢':'🔴'}</footer>
         {showBackup&&<BackupReminderModal onClose={()=>setShowBackup(false)}/>}
         {showSearch&&<GlobalSearchModal onClose={()=>setShowSearch(false)} onOpenPatient={openPatient} onGoTab={goTab}/>}
     </div>
