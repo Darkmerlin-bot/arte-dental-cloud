@@ -135,6 +135,56 @@ const DB={
     delete:async(t,id)=>{try{const{error}=await supabase.from(t).delete().eq('id',id);if(error)throw error;return true}catch(e){dbErr('eliminar',t,e);return false}}
 };
 
+// ===== AUDIT LOG =====
+// Estado global del usuario actual (para que Audit.log() sepa quién es)
+const Audit={
+    currentUser:null,
+    setUser(u){this.currentUser=u},
+    async log({accion,tabla,registro_id=null,paciente_id=null,detalles={}}){
+        try{
+            const u=this.currentUser;
+            await supabase.from('audit_logs').insert({
+                usuario_id:u?.id||null,
+                usuario_nombre:u?.name||'Sistema',
+                accion,
+                tabla,
+                registro_id,
+                paciente_id,
+                detalles
+            });
+        }catch(e){
+            // Auditoría no debe romper la operación principal
+            console.warn('No se pudo registrar audit:',e?.message);
+        }
+    },
+    // Helpers comunes
+    async patientCreated(p){return this.log({accion:'Creó paciente',tabla:'patients',registro_id:p?.id,paciente_id:p?.id,detalles:{nombre:p?.nombre,ci:p?.ci}})},
+    async patientUpdated(p,changes){return this.log({accion:'Editó paciente',tabla:'patients',registro_id:p?.id,paciente_id:p?.id,detalles:{nombre:p?.nombre,campos:changes}})},
+    async patientDeleted(p){return this.log({accion:'Eliminó paciente',tabla:'patients',registro_id:p?.id,paciente_id:p?.id,detalles:{nombre:p?.nombre,ci:p?.ci}})},
+    async medicalRecordSaved(p,fields){return this.log({accion:'Editó ficha médica',tabla:'medical_records',paciente_id:p?.id,detalles:{nombre_paciente:p?.nombre,campos:fields}})},
+    async odontogramSaved(p){return this.log({accion:'Editó odontograma',tabla:'medical_records',paciente_id:p?.id,detalles:{nombre_paciente:p?.nombre}})},
+    async treatmentCreated(t,p){return this.log({accion:'Creó tratamiento',tabla:'treatments',registro_id:t?.id,paciente_id:p?.id,detalles:{descripcion:t?.descripcion,monto:(t?.cantidad||0)*(t?.precio_unit||0)}})},
+    async treatmentUpdated(t,p,changes){return this.log({accion:'Editó tratamiento',tabla:'treatments',registro_id:t?.id,paciente_id:p?.id,detalles:{descripcion:t?.descripcion,campos:changes}})},
+    async treatmentDeleted(t,p){return this.log({accion:'Eliminó tratamiento',tabla:'treatments',registro_id:t?.id,paciente_id:p?.id,detalles:{descripcion:t?.descripcion}})},
+    async paymentMade(t,p,monto){return this.log({accion:'Registró pago',tabla:'treatments',registro_id:t?.id,paciente_id:p?.id,detalles:{descripcion:t?.descripcion,monto}})},
+    async appointmentCreated(a,p){return this.log({accion:'Creó cita',tabla:'appointments',registro_id:a?.id,paciente_id:p?.id,detalles:{fecha:a?.fecha,hora:a?.hora,odontologo:a?.odontologo}})},
+    async appointmentUpdated(a,p){return this.log({accion:'Editó cita',tabla:'appointments',registro_id:a?.id,paciente_id:p?.id,detalles:{fecha:a?.fecha,hora:a?.hora}})},
+    async appointmentDeleted(a,p){return this.log({accion:'Eliminó cita',tabla:'appointments',registro_id:a?.id,paciente_id:p?.id,detalles:{fecha:a?.fecha,hora:a?.hora}})},
+    async photoUploaded(p){return this.log({accion:'Subió foto',tabla:'images',paciente_id:p?.id,detalles:{nombre_paciente:p?.nombre}})},
+    async photoDeleted(p){return this.log({accion:'Eliminó foto',tabla:'images',paciente_id:p?.id,detalles:{nombre_paciente:p?.nombre}})},
+    async consentPrinted(p,template){return this.log({accion:'Imprimió consentimiento',tabla:'consent_records',paciente_id:p?.id,detalles:{tipo:template,nombre_paciente:p?.nombre}})},
+    async evolutionCreated(p,motivo){return this.log({accion:'Agregó evolución',tabla:'history',paciente_id:p?.id,detalles:{motivo:motivo?.slice(0,200)}})},
+    // No-paciente
+    async userCreated(u){return this.log({accion:'Creó usuario',tabla:'users',registro_id:u?.id,detalles:{name:u?.name,email:u?.email,role:u?.role}})},
+    async userUpdated(u,changes){return this.log({accion:'Editó usuario',tabla:'users',registro_id:u?.id,detalles:{name:u?.name,campos:changes}})},
+    async userDeleted(u){return this.log({accion:'Eliminó usuario',tabla:'users',registro_id:u?.id,detalles:{name:u?.name}})},
+    async configUpdated(){return this.log({accion:'Editó configuración de clínica',tabla:'clinic_config'})},
+    async backupExported(){return this.log({accion:'Exportó backup',tabla:'system'})},
+    async backupImported(){return this.log({accion:'Importó backup',tabla:'system'})},
+    async login(u){return this.log({accion:'Inició sesión',tabla:'users',registro_id:u?.id})},
+    async logout(u){return this.log({accion:'Cerró sesión',tabla:'users',registro_id:u?.id})}
+};
+
 // ===== Service layer =====
 const S={
     init:async()=>await DB.check(),
@@ -182,6 +232,7 @@ const S={
     saveHist:h=>DB.insert('history',h),
     getImgs:async pid=>DB.getAll('images',{notDeleted:true,eq:{paciente_id:pid}}),
     saveImg:i=>DB.insert('images',i),
+    updateImg:(id,patch)=>DB.update('images',id,patch),
     delImg:id=>DB.update('images',id,{deleted:true}),
     getMed:async pid=>{const{data}=await supabase.from('medical_records').select('*').eq('paciente_id',pid).maybeSingle();return data},
     saveMed:async r=>{const ex=await S.getMed(r.paciente_id);return ex?DB.update('medical_records',ex.id,r):DB.insert('medical_records',r)},
@@ -237,11 +288,76 @@ const S={
     },
     // Mantener legacy de budgets por compatibilidad pero ya no se usan en UI nueva
     getBudgets:pid=>DB.getAll('budgets',{notDeleted:true,eq:{paciente_id:pid},orderBy:'id',asc:false}),
-    getBudgetItems:bid=>DB.getAll('budget_items',{eq:{budget_id:bid},orderBy:'orden'})
+    getBudgetItems:bid=>DB.getAll('budget_items',{eq:{budget_id:bid},orderBy:'orden'}),
+    // Auditoría
+    getAuditLogs:async(opts={})=>{
+        try{
+            let q=supabase.from('audit_logs').select('*').order('created_at',{ascending:false}).limit(opts.limit||100);
+            if(opts.paciente_id)q=q.eq('paciente_id',opts.paciente_id);
+            if(opts.onlySystem)q=q.is('paciente_id',null);
+            const{data,error}=await q;
+            if(error)throw error;
+            return data||[];
+        }catch(e){console.error('Error cargando audit:',e);return[]}
+    }
 };
 
 const isPast=(d,t)=>d&&t?new Date(d+'T'+t)<new Date():false;
+// Comprime una imagen y devuelve blob WebP (más eficiente que JPEG base64)
+const compressToBlob=(file,maxSize=1200,quality=0.75)=>new Promise((res,rej)=>{
+    const r=new FileReader();
+    r.readAsDataURL(file);
+    r.onload=e=>{
+        const img=new Image();
+        img.src=e.target.result;
+        img.onload=()=>{
+            const c=document.createElement('canvas');
+            let w=img.width,h=img.height;
+            if(w>h&&w>maxSize){h*=maxSize/w;w=maxSize}
+            else if(h>maxSize){w*=maxSize/h;h=maxSize}
+            c.width=w;c.height=h;
+            c.getContext('2d').drawImage(img,0,0,w,h);
+            // Intentar WebP, fallback a JPEG si el navegador no soporta
+            c.toBlob(blob=>{
+                if(blob)res({blob,mime:blob.type,width:w,height:h});
+                else rej(new Error('No se pudo procesar la imagen'));
+            },'image/webp',quality);
+        };
+        img.onerror=()=>rej(new Error('Imagen inválida'));
+    };
+    r.onerror=()=>rej(new Error('Error leyendo archivo'));
+});
+
+// Backward compatible: el viejo compress devolvía base64. Lo mantenemos para casos legacy.
 const compress=file=>new Promise(res=>{const r=new FileReader();r.readAsDataURL(file);r.onload=e=>{const img=new Image();img.src=e.target.result;img.onload=()=>{const c=document.createElement('canvas');let w=img.width,h=img.height;const M=800;if(w>h&&w>M){h*=M/w;w=M}else if(h>M){w*=M/h;h=M}c.width=w;c.height=h;c.getContext('2d').drawImage(img,0,0,w,h);res(c.toDataURL('image/jpeg',0.6))}}});
+
+// Convierte un base64 a Blob (para migrar fotos viejas a Storage)
+const base64ToBlob=(b64)=>{
+    try{
+        const parts=b64.split(',');
+        const mime=parts[0].match(/:(.*?);/)?.[1]||'image/jpeg';
+        const bytes=atob(parts[1]);
+        const arr=new Uint8Array(bytes.length);
+        for(let i=0;i<bytes.length;i++)arr[i]=bytes.charCodeAt(i);
+        return new Blob([arr],{type:mime});
+    }catch(e){console.warn('No se pudo convertir base64',e);return null}
+};
+
+// Sube un blob a Supabase Storage y devuelve la URL pública
+const STORAGE_BUCKET='patient-photos';
+const uploadPhotoToStorage=async(blob,patientId,ext='webp')=>{
+    if(!blob)return null;
+    const filename=`${patientId}/${Date.now()}_${Math.random().toString(36).slice(2,8)}.${ext}`;
+    const{error}=await supabase.storage.from(STORAGE_BUCKET).upload(filename,blob,{contentType:blob.type,upsert:false});
+    if(error){console.error('Storage upload error',error);return null}
+    const{data}=supabase.storage.from(STORAGE_BUCKET).getPublicUrl(filename);
+    return{path:filename,url:data.publicUrl,size:blob.size};
+};
+
+const deletePhotoFromStorage=async(path)=>{
+    if(!path)return;
+    try{await supabase.storage.from(STORAGE_BUCKET).remove([path])}catch(e){console.warn('No se pudo borrar de storage',e)}
+};
 const formatCI=ci=>{if(!ci)return '';const nums=String(ci).replace(/\D/g,'');if(nums.length<=1)return nums;if(nums.length<=4)return nums.replace(/(\d{1})(\d{1,3})/,'$1.$2');if(nums.length<=7)return nums.replace(/(\d{1})(\d{3})(\d{1,3})/,'$1.$2.$3');return nums.replace(/(\d{1})(\d{3})(\d{3})(\d{1})/,'$1.$2.$3-$4').substring(0,12)};
 const calcEdad=fn=>{if(!fn)return null;const b=new Date(fn);if(isNaN(b))return null;const t=new Date();let a=t.getFullYear()-b.getFullYear();const m=t.getMonth()-b.getMonth();if(m<0||(m===0&&t.getDate()<b.getDate()))a--;return a};
 const MESES_ES=['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
@@ -541,13 +657,14 @@ const SlotModal=({slot,apps,pts,users,cond,user,onClose,onSaved})=>{
         const result=await S.saveApp({paciente_id:p.id,paciente_nombre:p.nombre,paciente_ci:p.ci,odontologo:form.dr,fecha:slot.date,hora:slot.time,tratamiento:form.tto||'',asistio:null,deleted:false});
         if(result){
             await S.saveHist({paciente_id:p.id,fecha:new Date().toLocaleDateString(),odontologo:form.dr,motivo:'CITA AGENDADA: '+slot.date+' '+slot.time,tipo:'CITA',deleted:false});
+            Audit.appointmentCreated(result,p);
             toast.ok('Cita agendada');onSaved();onClose();
         }
         setSaving(false);
     };
 
-    const toggle=async(id,val)=>{const a=apps.find(x=>x.id===id);if(a){await S.saveApp({...a,asistio:val});onSaved()}};
-    const del=async(id)=>{if(confirm('¿Eliminar cita?')){await S.delApp(id);onSaved();onClose()}};
+    const toggle=async(id,val)=>{const a=apps.find(x=>x.id===id);if(a){await S.saveApp({...a,asistio:val});const p=pts.find(x=>x.id===a.paciente_id);Audit.log({accion:val===true?'Marcó cita como asistida':val===false?'Marcó cita como no asistida':'Editó cita',tabla:'appointments',registro_id:a.id,paciente_id:a.paciente_id,detalles:{fecha:a.fecha,hora:a.hora}});onSaved()}};
+    const del=async(id)=>{if(confirm('¿Eliminar cita?')){const a=apps.find(x=>x.id===id);await S.delApp(id);if(a){const p=pts.find(x=>x.id===a.paciente_id);Audit.appointmentDeleted(a,p)}onSaved();onClose()}};
 
     return<Portal><div className="fixed inset-0 bg-black/60 z-[200] flex items-end sm:items-center justify-center p-0 sm:p-4" onClick={onClose}>
         <div className="bg-white dark:bg-slate-800 w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl p-5 max-h-[90vh] overflow-auto animate-slide-in" onClick={e=>e.stopPropagation()}>
@@ -1165,7 +1282,8 @@ const PatientHub=({user,patientId,onBack})=>{
         {id:'presup',label:'Tratamientos',icon:CreditCard},
         {id:'fotos',label:'Fotos',icon:ImageIcon},
         {id:'citas',label:'Citas',icon:Calendar},
-        {id:'consent',label:'Consentimientos',icon:ClipboardList}
+        {id:'consent',label:'Consentimientos',icon:ClipboardList},
+        {id:'audit',label:'Auditoría',icon:Shield}
     ];
 
     const hasAlerts=medRec&&(medRec.alergias?.length>0||medRec.alergias_medicamentos?.length>0);
@@ -1243,6 +1361,7 @@ const PatientHub=({user,patientId,onBack})=>{
                 {tab==='fotos'&&<PatientFotos patient={patient} imgs={imgs} clinic={clinic} onReload={loadAll}/>}
                 {tab==='citas'&&<PatientCitas patient={patient} apps={apps} onReload={loadAll}/>}
                 {tab==='consent'&&<PatientConsents patient={patient} user={user}/>}
+                {tab==='audit'&&<PatientAudit patient={patient}/>}
             </div>
         </div>
     </div>
@@ -1305,7 +1424,7 @@ const PatientFicha=({patient,medRec,user,onSaved})=>{
     const[rec,setRec]=useState(medRec||{paciente_id:patient.id,antecedentes_familiares:{},antecedentes_personales:{},alergias:[],alergias_medicamentos:[],medicacion_actual:[],derivado_de:{es_derivado:false},observaciones:'',odontograma:{},fecha_actualizacion:new Date().toLocaleDateString()});
     const[newA,setNewA]=useState('');const[newMA,setNewMA]=useState('');const[newMed,setNewMed]=useState({nombre:'',dosis:''});
 
-    const save=async()=>{const r=await S.saveMed({...rec,fecha_actualizacion:new Date().toLocaleDateString()});if(r){await S.saveHist({paciente_id:patient.id,fecha:new Date().toLocaleDateString(),odontologo:user.name,motivo:'FICHA MÉDICA ACTUALIZADA',tipo:'SISTEMA',deleted:false});toast.ok('Ficha guardada');onSaved()}};
+    const save=async()=>{const r=await S.saveMed({...rec,fecha_actualizacion:new Date().toLocaleDateString()});if(r){await S.saveHist({paciente_id:patient.id,fecha:new Date().toLocaleDateString(),odontologo:user.name,motivo:'FICHA MÉDICA ACTUALIZADA',tipo:'SISTEMA',deleted:false});Audit.medicalRecordSaved(patient,['ficha completa']);toast.ok('Ficha guardada');onSaved()}};
 
     return<div className="space-y-4">
         <Card className="p-4 bg-purple-50 dark:bg-purple-900/20 border-purple-200 dark:border-purple-800">
@@ -1341,7 +1460,7 @@ const PatientFicha=({patient,medRec,user,onSaved})=>{
 
 const PatientOdo=({patient,medRec,user,hist,users,onSaved,onHistReload})=>{
     const[rec,setRec]=useState(medRec||{paciente_id:patient.id,antecedentes_familiares:{},antecedentes_personales:{},alergias:[],alergias_medicamentos:[],medicacion_actual:[],odontograma:{}});
-    const save=async()=>{const r=await S.saveMed({...rec,fecha_actualizacion:new Date().toLocaleDateString()});if(r){toast.ok('Odontograma guardado');onSaved()}};
+    const save=async()=>{const r=await S.saveMed({...rec,fecha_actualizacion:new Date().toLocaleDateString()});if(r){Audit.odontogramSaved(patient);toast.ok('Odontograma guardado');onSaved()}};
     return<Odontogram value={rec.odontograma} onChange={o=>setRec({...rec,odontograma:o})} onSave={save} patient={patient} hist={hist} users={users} user={user} onHistReload={onHistReload}/>
 };
 
@@ -1545,12 +1664,100 @@ ${(totalPresup>0&&totalPagos>0)?`<div class="row total"><span>Saldo del período
     </div></Portal>;
 };
 
+// Helper para formatear timestamps ISO de manera legible
+const formatAuditTime=(iso)=>{
+    try{
+        const d=new Date(iso);
+        const ahora=new Date();
+        const diffMs=ahora-d;
+        const diffMin=Math.floor(diffMs/60000);
+        const diffHr=Math.floor(diffMs/3600000);
+        const diffDays=Math.floor(diffMs/86400000);
+        if(diffMin<1)return'hace un momento';
+        if(diffMin<60)return`hace ${diffMin} min`;
+        if(diffHr<24)return`hace ${diffHr}h`;
+        if(diffDays<7)return`hace ${diffDays}d`;
+        return d.toLocaleDateString('es-UY')+' '+d.toLocaleTimeString('es-UY',{hour:'2-digit',minute:'2-digit'});
+    }catch{return iso}
+};
+
+// Formatea los detalles del audit log según el tipo
+const formatAuditDetails=(log)=>{
+    const d=log.detalles||{};
+    const parts=[];
+    if(d.descripcion)parts.push(`"${d.descripcion}"`);
+    if(d.monto!==undefined&&d.monto!==null)parts.push(`$${Number(d.monto).toLocaleString('es-UY')}`);
+    if(d.total!==undefined)parts.push(`Total: $${Number(d.total).toLocaleString('es-UY')}`);
+    if(d.fecha)parts.push(d.fecha+(d.hora?' '+d.hora:''));
+    if(d.odontologo)parts.push('Dr. '+d.odontologo);
+    if(d.motivo)parts.push(d.motivo.slice(0,80));
+    if(d.tipo)parts.push('Tipo: '+d.tipo);
+    if(d.campos&&Array.isArray(d.campos))parts.push(`Campos: ${d.campos.slice(0,4).join(', ')}`);
+    if(d.cantidad!==undefined&&d.total===undefined)parts.push(`${d.cantidad} elementos`);
+    return parts.join(' · ');
+};
+
+// Color del badge según la acción
+const auditActionColor=(accion)=>{
+    if(/^Elimin/.test(accion))return'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400';
+    if(/^Cre/.test(accion))return'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400';
+    if(/^Edit/.test(accion))return'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400';
+    if(/^Registr|^Aplic|pago/i.test(accion))return'bg-brand-100 dark:bg-brand-900/30 text-brand-700 dark:text-brand-400';
+    if(/Subió|Imprimió/.test(accion))return'bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-400';
+    return'bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300';
+};
+
+const PatientAudit=({patient})=>{
+    const[logs,setLogs]=useState([]);
+    const[loading,setLoading]=useState(true);
+    const[refreshKey,setRefreshKey]=useState(0);
+
+    useEffect(()=>{(async()=>{
+        setLoading(true);
+        const r=await S.getAuditLogs({paciente_id:patient.id,limit:200});
+        setLogs(r);
+        setLoading(false);
+    })()},[patient.id,refreshKey]);
+
+    return<div className="space-y-3">
+        <Card className="p-3 bg-slate-50 dark:bg-slate-900/30 border-l-4 border-slate-500 flex justify-between items-center gap-2">
+            <div className="min-w-0 flex-1">
+                <p className="text-xs font-bold flex items-center gap-1.5"><Shield size={14} className="text-slate-500"/>Auditoría del paciente</p>
+                <p className="text-[10px] text-slate-500 dark:text-slate-400">{logs.length} registro{logs.length!==1?'s':''}</p>
+            </div>
+            <Btn variant="secondary" onClick={()=>setRefreshKey(k=>k+1)} className="px-2 py-1.5 text-[10px]"><RefreshCw size={12}/></Btn>
+        </Card>
+
+        {loading?<Card className="p-8 text-center"><RefreshCw className="animate-spin mx-auto" size={20}/></Card>
+        :logs.length===0?<Card className="p-8 text-center text-slate-400 text-xs">
+            <Shield size={32} className="mx-auto mb-2 opacity-30"/>
+            <p>Sin registros de auditoría</p>
+            <p className="text-[10px] mt-1">Las acciones sobre este paciente quedarán registradas aquí</p>
+        </Card>
+        :<Card className="overflow-hidden">
+            <div className="divide-y divide-slate-200 dark:divide-slate-700 max-h-[70vh] overflow-auto">
+                {logs.map(log=>{
+                    const detalles=formatAuditDetails(log);
+                    return<div key={log.id} className="p-3 hover:bg-slate-50 dark:hover:bg-slate-700/30">
+                        <div className="flex justify-between items-start gap-2 mb-1">
+                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${auditActionColor(log.accion)}`}>{log.accion}</span>
+                            <span className="text-[9px] text-slate-400 whitespace-nowrap shrink-0">{formatAuditTime(log.created_at)}</span>
+                        </div>
+                        {detalles&&<p className="text-[11px] text-slate-700 dark:text-slate-300 break-words">{detalles}</p>}
+                        <p className="text-[9px] text-slate-400 mt-0.5">Por <strong>{log.usuario_nombre||'Sistema'}</strong></p>
+                    </div>;
+                })}
+            </div>
+        </Card>}
+    </div>;
+};
+
 const PatientHistoria=({patient,hist,users,user,clinic,onReload})=>{
     const[subTab,setSubTab]=useState('todo');
     const[form,setForm]=useState({tto:'',dr:user.role===Role.ODONTOLOGO?user.name:''});
     const[printOpen,setPrintOpen]=useState(false);
 
-    const saveEvo=async()=>{if(!form.tto||!form.dr)return toast.warn('Complete campos');const r=await S.saveHist({paciente_id:patient.id,fecha:new Date().toLocaleDateString(),odontologo:form.dr,motivo:form.tto,tipo:'EVOLUCION',deleted:false});if(r){setForm({tto:'',dr:user.role===Role.ODONTOLOGO?user.name:form.dr});toast.ok('Evolución guardada');onReload()}};
+    const saveEvo=async()=>{if(!form.tto||!form.dr)return toast.warn('Complete campos');const r=await S.saveHist({paciente_id:patient.id,fecha:new Date().toLocaleDateString(),odontologo:form.dr,motivo:form.tto,tipo:'EVOLUCION',deleted:false});if(r){Audit.evolutionCreated(patient,form.tto);setForm({tto:'',dr:user.role===Role.ODONTOLOGO?user.name:form.dr});toast.ok('Evolución guardada');onReload()}};
 
     const filtered=useMemo(()=>{
         if(subTab==='todo')return hist;
@@ -1611,16 +1818,85 @@ const PatientHistoria=({patient,hist,users,user,clinic,onReload})=>{
 
 const PatientFotos=({patient,imgs,clinic,onReload})=>{
     const[uploading,setUploading]=useState(false);
+    const[uploadProgress,setUploadProgress]=useState({done:0,total:0});
+    const[migrating,setMigrating]=useState(false);
     const[fullImg,setFullImg]=useState(null);
     const[selectMode,setSelectMode]=useState(false);
     const[selected,setSelected]=useState(new Set());
 
-    const addPhoto=async e=>{const files=Array.from(e.target.files);if(!files.length)return;setUploading(true);for(const f of files){const d=await compress(f);await S.saveImg({paciente_id:patient.id,data:d,date:new Date().toLocaleDateString(),deleted:false})}setUploading(false);onReload()};
+    // Helper: devuelve la URL a mostrar (storage o fallback a base64)
+    const imgSrc=i=>i.url||i.data||'';
+
+    const addPhoto=async e=>{
+        const files=Array.from(e.target.files);
+        if(!files.length)return;
+        setUploading(true);
+        setUploadProgress({done:0,total:files.length});
+        let ok=0,fail=0;
+        for(const f of files){
+            try{
+                const{blob}=await compressToBlob(f,1200,0.78);
+                const up=await uploadPhotoToStorage(blob,patient.id,'webp');
+                if(up){
+                    await S.saveImg({paciente_id:patient.id,storage_path:up.path,url:up.url,mime_type:'image/webp',size_bytes:up.size,date:new Date().toLocaleDateString(),deleted:false});
+                    ok++;
+                }else{
+                    // Fallback: si falla Storage, guardar base64 (modo viejo) para no perder la foto
+                    const d=await compress(f);
+                    await S.saveImg({paciente_id:patient.id,data:d,date:new Date().toLocaleDateString(),deleted:false});
+                    fail++;
+                }
+            }catch(err){console.error('Error subiendo foto',err);fail++}
+            setUploadProgress(p=>({...p,done:p.done+1}));
+        }
+        setUploading(false);
+        setUploadProgress({done:0,total:0});
+        Audit.photoUploaded(patient);
+        if(fail>0)toast.warn(`${ok} subidas OK · ${fail} guardadas en base64 (fallback)`);
+        else if(ok>0)toast.ok(`${ok} foto${ok>1?'s':''} subida${ok>1?'s':''}`);
+        onReload();
+    };
+
+    // Migrar fotos viejas (base64) a Storage automáticamente al cargar
+    useEffect(()=>{
+        const oldOnes=imgs.filter(i=>i.data&&!i.url&&!i.storage_path);
+        if(!oldOnes.length)return;
+        let cancelled=false;
+        (async()=>{
+            setMigrating(true);
+            let done=0;
+            for(const i of oldOnes){
+                if(cancelled)break;
+                try{
+                    const blob=base64ToBlob(i.data);
+                    if(!blob)continue;
+                    const up=await uploadPhotoToStorage(blob,patient.id,'jpg');
+                    if(up){
+                        // Actualizar fila: limpiar base64, guardar url
+                        await S.updateImg(i.id,{storage_path:up.path,url:up.url,mime_type:blob.type,size_bytes:up.size,data:null});
+                        done++;
+                    }
+                }catch(e){console.warn('No se pudo migrar foto',i.id,e)}
+            }
+            setMigrating(false);
+            if(done>0&&!cancelled){toast.ok(`${done} foto${done>1?'s':''} migrada${done>1?'s':''} a Storage`);onReload({silent:true})}
+        })();
+        return()=>{cancelled=true};
+    },[imgs.length]); // solo cuando cambia la cantidad
 
     const toggleSel=id=>setSelected(s=>{const n=new Set(s);n.has(id)?n.delete(id):n.add(id);return n});
     const selectAll=()=>setSelected(new Set(imgs.map(i=>i.id)));
     const clearSel=()=>setSelected(new Set());
     const exitSelect=()=>{setSelectMode(false);setSelected(new Set())};
+
+    const delPhoto=async(i)=>{
+        if(!confirm('¿Borrar?'))return;
+        // Borrar de Storage si existe
+        if(i.storage_path)await deletePhotoFromStorage(i.storage_path);
+        await S.delImg(i.id);
+        Audit.photoDeleted(patient);
+        onReload();
+    };
 
     const printSelected=()=>{
         const fotos=imgs.filter(i=>selected.has(i.id));
@@ -1664,7 +1940,7 @@ ${header.html}
 </div>
 <h2>Galería fotográfica</h2>
 <div class="grid">
-${fotos.map((f,idx)=>`<div class="foto"><img src="${f.data}"/><div class="cap"><span class="num">Foto ${idx+1}</span> · ${f.date||'—'}</div></div>`).join('')}
+${fotos.map((f,idx)=>`<div class="foto"><img src="${imgSrc(f)}"/><div class="cap"><span class="num">Foto ${idx+1}</span> · ${f.date||'—'}</div></div>`).join('')}
 </div>
 </div>
 </body></html>`;
@@ -1689,12 +1965,16 @@ ${fotos.map((f,idx)=>`<div class="foto"><img src="${f.data}"/><div class="cap"><
             </>}
         </div>
 
+        {/* Indicadores de proceso */}
+        {migrating&&<div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg p-2 mb-2 flex items-center gap-2"><RefreshCw className="animate-spin text-amber-600 dark:text-amber-400" size={14}/><p className="text-[10px] text-amber-700 dark:text-amber-300">Migrando fotos viejas a Storage en segundo plano...</p></div>}
+        {uploading&&uploadProgress.total>0&&<div className="bg-brand-50 dark:bg-brand-900/20 border border-brand-200 dark:border-brand-800 rounded-lg p-2 mb-2"><div className="flex items-center gap-2 mb-1"><RefreshCw className="animate-spin text-brand-600 dark:text-brand-400" size={14}/><p className="text-[10px] text-brand-700 dark:text-brand-300">Subiendo {uploadProgress.done}/{uploadProgress.total}...</p></div><div className="w-full h-1 bg-brand-100 dark:bg-brand-900/40 rounded-full overflow-hidden"><div className="h-full bg-brand-500 transition-all" style={{width:`${(uploadProgress.done/uploadProgress.total)*100}%`}}/></div></div>}
+
         <div className="grid grid-cols-3 gap-2">
             {!selectMode&&<label className="aspect-square border-2 border-dashed border-slate-300 dark:border-slate-600 rounded-lg flex flex-col items-center justify-center cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700/30">{uploading?<RefreshCw className="animate-spin" size={20}/>:<><Upload size={20} className="text-slate-400"/><span className="text-[10px] text-slate-400">Subir</span></>}<input type="file" multiple accept="image/*" onChange={addPhoto} className="hidden" disabled={uploading}/></label>}
-            {imgs.map(i=>{const isSel=selected.has(i.id);return<div key={i.id} className={`relative aspect-square rounded-lg overflow-hidden border-2 ${isSel?'border-brand-500 ring-2 ring-brand-300':'border-slate-200 dark:border-slate-700'} ${selectMode?'cursor-pointer':''}`} onClick={selectMode?()=>toggleSel(i.id):undefined}>
-                <img src={i.data} className="w-full h-full object-cover" onClick={selectMode?undefined:e=>{e.stopPropagation();setFullImg(i.data)}}/>
+            {imgs.map(i=>{const isSel=selected.has(i.id);const src=imgSrc(i);return<div key={i.id} className={`relative aspect-square rounded-lg overflow-hidden border-2 ${isSel?'border-brand-500 ring-2 ring-brand-300':'border-slate-200 dark:border-slate-700'} ${selectMode?'cursor-pointer':''}`} onClick={selectMode?()=>toggleSel(i.id):undefined}>
+                <img src={src} className="w-full h-full object-cover" loading="lazy" onClick={selectMode?undefined:e=>{e.stopPropagation();setFullImg(src)}}/>
                 {selectMode&&<div className={`absolute top-1 left-1 w-6 h-6 rounded-full border-2 flex items-center justify-center text-xs font-bold ${isSel?'bg-brand-600 border-brand-600 text-white':'bg-white/80 border-white'}`}>{isSel?'✓':''}</div>}
-                {!selectMode&&<button onClick={async e=>{e.stopPropagation();if(confirm('¿Borrar?')){await S.delImg(i.id);onReload()}}} className="absolute top-1 right-1 bg-red-500 text-white p-0.5 rounded text-[10px]">×</button>}
+                {!selectMode&&<button onClick={e=>{e.stopPropagation();delPhoto(i)}} className="absolute top-1 right-1 bg-red-500 text-white p-0.5 rounded text-[10px]">×</button>}
                 {i.date&&<div className="absolute bottom-0 inset-x-0 bg-black/60 text-white text-[9px] px-1.5 py-0.5">{i.date}</div>}
             </div>})}
         </div>
@@ -1790,6 +2070,7 @@ const ConsentModal=({tpl,patient,user,onClose,onSaved})=>{
         });
         if(r){
             setRecorded(true);setRecId(r.id);
+            Audit.consentPrinted(patient,tpl.titulo);
             if(!silencioso)toast.ok('Consentimiento registrado');
             if(onSaved)onSaved();
             return r.id;
@@ -2299,6 +2580,7 @@ const PatientTreatments=({patient,user,onReload})=>{
             setTreatments(arr=>arr.map(x=>x.id===tempId?{...r,_pending:false}:x));
             setCommentCounts(c=>{const nc={...c};nc[r.id]=0;delete nc[tempId];return nc});
             await S.saveHist({paciente_id:patient.id,fecha:new Date().toLocaleDateString(),odontologo:user.name,motivo:`TRATAMIENTO: ${desc} x${qty} = $${qty*price}`,tipo:'PRESUPUESTO',deleted:false});
+            Audit.treatmentCreated(r,patient);
             if(onReload)onReload({silent:true});
         }else{
             setTreatments(arr=>arr.filter(x=>x.id!==tempId));
@@ -2308,6 +2590,8 @@ const PatientTreatments=({patient,user,onReload})=>{
     const updateField=async(id,patch)=>{
         setTreatments(arr=>arr.map(x=>x.id===id?{...x,...patch}:x));
         await S.updateTreatment(id,patch);
+        const t=treatments.find(x=>x.id===id);
+        if(t)Audit.treatmentUpdated(t,patient,Object.keys(patch));
         if(onReload)onReload({silent:true});
     };
 
@@ -2322,7 +2606,7 @@ const PatientTreatments=({patient,user,onReload})=>{
         setTreatments(arr=>arr.filter(x=>x.id!==t.id));
         const ok=await S.delTreatment(t.id);
         if(!ok)setTreatments(backup);
-        else if(onReload)onReload({silent:true});
+        else{Audit.treatmentDeleted(t,patient);if(onReload)onReload({silent:true})}
     };
 
     const confirmPay=async(t,amt)=>{
@@ -2333,6 +2617,7 @@ const PatientTreatments=({patient,user,onReload})=>{
         setTreatments(arr=>arr.map(x=>x.id===t.id?{...x,...patch}:x));
         await S.updateTreatment(t.id,patch);
         await S.saveHist({paciente_id:patient.id,fecha:new Date().toLocaleDateString(),odontologo:user.name,motivo:`PAGO - ${t.descripcion}: $${amt}`,tipo:'PAGO',deleted:false});
+        Audit.paymentMade(t,patient,amt);
         if(patch.estado==='terminado'){
             await S.saveHist({paciente_id:patient.id,fecha:new Date().toLocaleDateString(),odontologo:user.name,motivo:`Tratamiento "${t.descripcion}" SALDADO`,tipo:'SISTEMA',deleted:false});
         }
@@ -2361,12 +2646,14 @@ const PatientTreatments=({patient,user,onReload})=>{
         for(const u of updates){
             await S.updateTreatment(u.t.id,u.patch);
             await S.saveHist({paciente_id:patient.id,fecha:new Date().toLocaleDateString(),odontologo:user.name,motivo:`PAGO - ${u.t.descripcion}: $${u.amt}`,tipo:'PAGO',deleted:false});
+            Audit.paymentMade(u.t,patient,u.amt);
             if(u.patch.estado==='terminado'){
                 await S.saveHist({paciente_id:patient.id,fecha:new Date().toLocaleDateString(),odontologo:user.name,motivo:`Tratamiento "${u.t.descripcion}" SALDADO`,tipo:'SISTEMA',deleted:false});
             }
         }
         // Registro resumen
         await S.saveHist({paciente_id:patient.id,fecha:new Date().toLocaleDateString(),odontologo:user.name,motivo:`PAGO GLOBAL: $${total} (distribuido en ${updates.length} tratamiento${updates.length!==1?'s':''})`,tipo:'SISTEMA',deleted:false});
+        Audit.log({accion:'Aplicó pago global',tabla:'treatments',paciente_id:patient.id,detalles:{total,cantidad:updates.length}});
         setGlobalPayOpen(false);
         if(onReload)onReload({silent:true});
         toast.ok(`Pago global de $${total.toLocaleString('es-UY')} aplicado`);
@@ -2528,10 +2815,13 @@ const PatientsList=({user,onOpen})=>{
         try{
             const payload={...form,fecha_nacimiento:form.fecha_nacimiento||null};
             const r=editId?await S.savePatient({id:editId,...payload}):await S.savePatient(payload);
-            if(r){setForm(blank);setCiDisplay('');setEditId(null);setShowForm(false);await load();toast.ok(editId?'Actualizado':'Creado')}
+            if(r){
+                editId?Audit.patientUpdated(r,Object.keys(payload)):Audit.patientCreated(r);
+                setForm(blank);setCiDisplay('');setEditId(null);setShowForm(false);await load();toast.ok(editId?'Actualizado':'Creado');
+            }
         }finally{setSaving(false)}
     };
-    const delPatient=async(p,e)=>{e.stopPropagation();if(!confirm(`¿Eliminar a ${p.nombre}?`))return;if(!confirm('¿Seguro? No se puede deshacer'))return;await S.delPatient(p.id);load()};
+    const delPatient=async(p,e)=>{e.stopPropagation();if(!confirm(`¿Eliminar a ${p.nombre}?`))return;if(!confirm('¿Seguro? No se puede deshacer'))return;await S.delPatient(p.id);Audit.patientDeleted(p);load()};
     const editPatient=(p,e)=>{e.stopPropagation();setEditId(p.id);setForm({nombre:p.nombre,ci:p.ci,telefono:p.telefono||'',email:p.email||'',fecha_nacimiento:p.fecha_nacimiento||'',direccion:p.direccion||''});setCiDisplay(formatCI(p.ci));setShowForm(true)};
     const filtered=pts.filter(p=>(p.nombre||'').toLowerCase().includes(search.toLowerCase())||(p.ci||'').includes(search));
 
@@ -2626,6 +2916,88 @@ const TemplatesPanel=()=>{
 };
 
 // ===== ADMIN =====
+// Panel de auditoría del sistema (solo admin)
+const SystemAuditPanel=()=>{
+    const[logs,setLogs]=useState([]);
+    const[loading,setLoading]=useState(true);
+    const[scope,setScope]=useState('all'); // all | system | patients
+    const[userFilter,setUserFilter]=useState('');
+    const[search,setSearch]=useState('');
+    const[refreshKey,setRefreshKey]=useState(0);
+
+    useEffect(()=>{(async()=>{
+        setLoading(true);
+        const opts={limit:300};
+        if(scope==='system')opts.onlySystem=true;
+        const r=await S.getAuditLogs(opts);
+        setLogs(r);
+        setLoading(false);
+    })()},[scope,refreshKey]);
+
+    const filtered=useMemo(()=>{
+        let arr=logs;
+        if(scope==='patients')arr=arr.filter(l=>l.paciente_id!==null);
+        if(userFilter)arr=arr.filter(l=>l.usuario_nombre===userFilter);
+        if(search.trim()){
+            const t=search.toLowerCase();
+            arr=arr.filter(l=>l.accion?.toLowerCase().includes(t)||l.usuario_nombre?.toLowerCase().includes(t)||l.tabla?.toLowerCase().includes(t)||JSON.stringify(l.detalles||{}).toLowerCase().includes(t));
+        }
+        return arr;
+    },[logs,scope,userFilter,search]);
+
+    const usuarios=useMemo(()=>{const s=new Set();logs.forEach(l=>l.usuario_nombre&&s.add(l.usuario_nombre));return[...s].sort()},[logs]);
+
+    return<div className="space-y-3">
+        <Card className="p-3">
+            <div className="flex items-center gap-2 mb-2">
+                <Shield size={16} className="text-slate-500"/>
+                <h3 className="font-bold text-sm">Auditoría del sistema</h3>
+                <Btn variant="secondary" onClick={()=>setRefreshKey(k=>k+1)} className="ml-auto px-2 py-1 text-[10px]"><RefreshCw size={12}/></Btn>
+            </div>
+            <p className="text-[10px] text-slate-400 mb-3">Registro de todas las acciones que se realizan en el sistema.</p>
+
+            <div className="space-y-2">
+                <div className="grid grid-cols-3 gap-1.5">
+                    <button onClick={()=>setScope('all')} className={`py-1.5 text-[10px] rounded-lg font-bold ${scope==='all'?'bg-brand-600 text-white':'bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300'}`}>Todo</button>
+                    <button onClick={()=>setScope('patients')} className={`py-1.5 text-[10px] rounded-lg font-bold ${scope==='patients'?'bg-brand-600 text-white':'bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300'}`}>Pacientes</button>
+                    <button onClick={()=>setScope('system')} className={`py-1.5 text-[10px] rounded-lg font-bold ${scope==='system'?'bg-brand-600 text-white':'bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300'}`}>Sistema</button>
+                </div>
+                <Input type="text" value={search} onChange={e=>setSearch(e.target.value)} placeholder="🔍 Buscar acción, usuario, detalle..."/>
+                {usuarios.length>1&&<Select value={userFilter} onChange={e=>setUserFilter(e.target.value)}>
+                    <option value="">Todos los usuarios</option>
+                    {usuarios.map(u=><option key={u} value={u}>{u}</option>)}
+                </Select>}
+            </div>
+
+            <div className="text-[10px] text-slate-500 dark:text-slate-400 mt-2 px-1">{filtered.length} resultado{filtered.length!==1?'s':''}</div>
+        </Card>
+
+        {loading?<Card className="p-8 text-center"><RefreshCw className="animate-spin mx-auto" size={20}/></Card>
+        :filtered.length===0?<Card className="p-8 text-center text-slate-400 text-xs">
+            <Shield size={32} className="mx-auto mb-2 opacity-30"/>
+            <p>Sin registros</p>
+        </Card>
+        :<Card className="overflow-hidden">
+            <div className="divide-y divide-slate-200 dark:divide-slate-700 max-h-[70vh] overflow-auto">
+                {filtered.map(log=>{
+                    const detalles=formatAuditDetails(log);
+                    return<div key={log.id} className="p-3 hover:bg-slate-50 dark:hover:bg-slate-700/30">
+                        <div className="flex justify-between items-start gap-2 mb-1">
+                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${auditActionColor(log.accion)}`}>{log.accion}</span>
+                            <span className="text-[9px] text-slate-400 whitespace-nowrap shrink-0">{formatAuditTime(log.created_at)}</span>
+                        </div>
+                        {detalles&&<p className="text-[11px] text-slate-700 dark:text-slate-300 break-words">{detalles}</p>}
+                        <div className="flex justify-between items-center mt-1">
+                            <p className="text-[9px] text-slate-400">Por <strong>{log.usuario_nombre||'Sistema'}</strong> · {log.tabla}</p>
+                            {log.paciente_id&&<span className="text-[9px] bg-slate-100 dark:bg-slate-700 px-1.5 py-0.5 rounded">Paciente #{log.paciente_id}</span>}
+                        </div>
+                    </div>;
+                })}
+            </div>
+        </Card>}
+    </div>;
+};
+
 const Admin=({user,online,onUserUpdated})=>{
     const isAdmin=user.role===Role.ADMIN;
     const[tab,setTab]=useState(isAdmin?'users':'profile');
@@ -2648,11 +3020,11 @@ const Admin=({user,online,onUserUpdated})=>{
             if(editId){
                 if(!uForm.name||!uForm.username)return toast.warn('Nombre y usuario obligatorios');
                 const r=await S.updateUserMeta({id:editId,name:uForm.name,username:uForm.username,role:uForm.role});
-                if(r){setUForm({name:'',username:'',email:'',password:'',role:Role.USUARIO});setEditId(null);setUsers(await S.getUsers());toast.ok('Usuario actualizado')}
+                if(r){Audit.userUpdated(r,['name','username','role']);setUForm({name:'',username:'',email:'',password:'',role:Role.USUARIO});setEditId(null);setUsers(await S.getUsers());toast.ok('Usuario actualizado')}
             }else{
                 if(!uForm.name||!uForm.username||!uForm.email||!uForm.password)return toast.warn('Complete todos los campos');
                 const r=await S.createUser(uForm);
-                if(r.ok){setUForm({name:'',username:'',email:'',password:'',role:Role.USUARIO});setUsers(await S.getUsers());toast.ok('Usuario creado')}
+                if(r.ok){Audit.userCreated({name:uForm.name,email:uForm.email,role:uForm.role});setUForm({name:'',username:'',email:'',password:'',role:Role.USUARIO});setUsers(await S.getUsers());toast.ok('Usuario creado')}
                 else toast.err(r.err);
             }
         }finally{setSaving(false)}
@@ -2662,7 +3034,7 @@ const Admin=({user,online,onUserUpdated})=>{
         setProfileSaving(true);
         const r=await DB.update('users',user.id,{name:profile.name,registro_msp:profile.registro_msp||null});
         setProfileSaving(false);
-        if(r){toast.ok('Perfil actualizado');if(onUserUpdated)onUserUpdated(r)}
+        if(r){Audit.userUpdated(r,['perfil propio']);toast.ok('Perfil actualizado');if(onUserUpdated)onUserUpdated(r)}
     };
 
     const saveClinic=async()=>{
@@ -2670,7 +3042,7 @@ const Admin=({user,online,onUserUpdated})=>{
         setClinicSaving(true);
         const r=await S.saveClinicConfig(clinic);
         setClinicSaving(false);
-        if(r)toast.ok('Configuración guardada');
+        if(r){Audit.configUpdated();toast.ok('Configuración guardada')}
     };
     const onLogoFile=async(e)=>{
         const f=e.target.files?.[0];if(!f)return;
@@ -2688,6 +3060,7 @@ const Admin=({user,online,onUserUpdated})=>{
             {isAdmin&&tabBtn('clinic','Clínica','bg-pink-600')}
             {isAdmin&&tabBtn('templates','Plantillas','bg-amber-600')}
             {tabBtn('backup','Backup','bg-emerald-600')}
+            {isAdmin&&tabBtn('audit','Auditoría','bg-slate-600')}
             {tabBtn('info','Sistema','bg-indigo-600')}
         </div>
 
@@ -2885,11 +3258,13 @@ const Admin=({user,online,onUserUpdated})=>{
                 </Card>
                 </>;
             })()}
-            <Card className="p-6 text-center"><Download size={32} className="mx-auto text-brand-600 dark:text-brand-400 mb-2"/><h4 className="font-bold mb-2">Exportar</h4><p className="text-[10px] text-slate-400 mb-3">Pacientes, citas, historial, fichas, fotos, tratamientos, consentimientos, configuración</p><Btn onClick={async()=>{const d=await S.export();const b=new Blob([d],{type:'application/json'});const u=URL.createObjectURL(b);const a=document.createElement('a');a.href=u;a.download='ArteDental_Backup_'+todayStr()+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(u),1000);markBackupDone();toast.ok('Backup descargado')}} className="w-full py-3 text-sm">Descargar backup</Btn></Card>
-            <Card className="p-6 text-center"><Upload size={32} className="mx-auto text-emerald-600 dark:text-emerald-400 mb-2"/><h4 className="font-bold mb-2">Importar</h4><p className="text-[10px] text-slate-400 mb-3">⚠️ Esto puede sobrescribir datos. Hacé backup antes.</p><input type="file" ref={fileRef} accept=".json" className="hidden" onChange={async e=>{const f=e.target.files[0];if(!f)return;if(!confirm('¿Cargar este backup? Los datos actuales pueden ser sobrescritos.'))return;const r=new FileReader();r.onload=async ev=>{if(await S.import(ev.target.result)){toast.ok('Importado, recargando...');setTimeout(()=>window.location.reload(),1500)}};r.readAsText(f)}}/><Btn variant="success" onClick={()=>fileRef.current.click()} className="w-full py-3 text-sm">Cargar backup</Btn></Card>
+            <Card className="p-6 text-center"><Download size={32} className="mx-auto text-brand-600 dark:text-brand-400 mb-2"/><h4 className="font-bold mb-2">Exportar</h4><p className="text-[10px] text-slate-400 mb-3">Pacientes, citas, historial, fichas, fotos, tratamientos, consentimientos, configuración</p><Btn onClick={async()=>{const d=await S.export();const b=new Blob([d],{type:'application/json'});const u=URL.createObjectURL(b);const a=document.createElement('a');a.href=u;a.download='ArteDental_Backup_'+todayStr()+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(u),1000);markBackupDone();Audit.backupExported();toast.ok('Backup descargado')}} className="w-full py-3 text-sm">Descargar backup</Btn></Card>
+            <Card className="p-6 text-center"><Upload size={32} className="mx-auto text-emerald-600 dark:text-emerald-400 mb-2"/><h4 className="font-bold mb-2">Importar</h4><p className="text-[10px] text-slate-400 mb-3">⚠️ Esto puede sobrescribir datos. Hacé backup antes.</p><input type="file" ref={fileRef} accept=".json" className="hidden" onChange={async e=>{const f=e.target.files[0];if(!f)return;if(!confirm('¿Cargar este backup? Los datos actuales pueden ser sobrescritos.'))return;const r=new FileReader();r.onload=async ev=>{if(await S.import(ev.target.result)){Audit.backupImported();toast.ok('Importado, recargando...');setTimeout(()=>window.location.reload(),1500)}};r.readAsText(f)}}/><Btn variant="success" onClick={()=>fileRef.current.click()} className="w-full py-3 text-sm">Cargar backup</Btn></Card>
         </div>}
 
-        {tab==='info'&&<div className="bg-gradient-to-br from-slate-800 to-indigo-900 p-6 rounded-xl text-white text-center"><Cloud size={40} className="mx-auto mb-2"/><h4 className="text-lg font-bold mb-2">Sistema en la Nube</h4><p className="text-white/80 text-sm mb-3">Supabase Auth + Database</p><div className={`inline-flex items-center gap-2 px-4 py-2 rounded-full ${online?'bg-emerald-500':'bg-red-500'}`}>{online?<><Wifi size={16}/>Conectado</>:<><WifiOff size={16}/>Offline</>}</div><p className="text-white/60 text-[10px] mt-3">v3.13 • Optimizaciones de carga</p></div>}
+        {tab==='audit'&&isAdmin&&<SystemAuditPanel/>}
+
+        {tab==='info'&&<div className="bg-gradient-to-br from-slate-800 to-indigo-900 p-6 rounded-xl text-white text-center"><Cloud size={40} className="mx-auto mb-2"/><h4 className="text-lg font-bold mb-2">Sistema en la Nube</h4><p className="text-white/80 text-sm mb-3">Supabase Auth + Database</p><div className={`inline-flex items-center gap-2 px-4 py-2 rounded-full ${online?'bg-emerald-500':'bg-red-500'}`}>{online?<><Wifi size={16}/>Conectado</>:<><WifiOff size={16}/>Offline</>}</div><p className="text-white/60 text-[10px] mt-3">v3.14 • Auditoría + Storage WebP</p></div>}
     </div>
 };
 
@@ -3117,9 +3492,22 @@ const App=()=>{
 
     useEffect(()=>{(async()=>{
         const ok=await S.init();setOnline(ok);
-        if(ok){const u=await S.getCurrentUser();if(u)setUser(u)}
+        if(ok){const u=await S.getCurrentUser();if(u){setUser(u);Audit.setUser(u)}}
         setLoading(false);
     })()},[]);
+
+    // Mantener Audit.currentUser sincronizado + registrar login al iniciar sesión
+    const lastUserIdRef=useRef(null);
+    useEffect(()=>{
+        Audit.setUser(user);
+        if(user&&lastUserIdRef.current!==user.id){
+            lastUserIdRef.current=user.id;
+            // Solo logear si vinimos de no-user
+            Audit.login(user);
+        }else if(!user){
+            lastUserIdRef.current=null;
+        }
+    },[user]);
 
     // Mostrar recordatorio de backup solo si pasó la fecha programada Y no se mostró hoy (solo admin)
     useEffect(()=>{
@@ -3133,14 +3521,8 @@ const App=()=>{
 
     useEffect(()=>{const onFocus=async()=>setOnline(await DB.check());window.addEventListener('focus',onFocus);return()=>window.removeEventListener('focus',onFocus)},[]);
 
-    useEffect(()=>{
-        if(!user)return;
-        let timer;
-        const reset=()=>{clearTimeout(timer);timer=setTimeout(async()=>{toast.warn('Sesión cerrada por inactividad');await supabase.auth.signOut();setUser(null)},INACTIVITY_MS)};
-        const events=['mousedown','keydown','touchstart','scroll'];
-        events.forEach(e=>window.addEventListener(e,reset));reset();
-        return()=>{clearTimeout(timer);events.forEach(e=>window.removeEventListener(e,reset))};
-    },[user]);
+    // Timeout de inactividad: DESACTIVADO por preferencia del usuario.
+    // La sesión solo se cierra manualmente o cuando expira el refresh token de Supabase (30 días).
 
     // Atajo Ctrl+K / Cmd+K para abrir búsqueda
     useEffect(()=>{
@@ -3152,7 +3534,7 @@ const App=()=>{
         return()=>document.removeEventListener('keydown',onKey);
     },[user]);
 
-    const logout=async()=>{await supabase.auth.signOut();setUser(null);setPid(null);toast.ok('Sesión cerrada')};
+    const logout=async()=>{await Audit.logout(user);await supabase.auth.signOut();setUser(null);setPid(null);toast.ok('Sesión cerrada')};
 
     const openPatient=(id)=>{setPid(id);setTab('pacientes')};
     const goTab=(t)=>{setTab(t);setPid(null)};
@@ -3196,7 +3578,7 @@ const App=()=>{
             {tab==='admin'&&<Admin user={user} online={online} onUserUpdated={u=>setUser({...user,...u})}/>}
         </main>
 
-        <footer className="p-2 text-center text-[10px] text-slate-400 no-print safe-bottom">Arte Dental © 2025 • v3.13 • {online?'🟢':'🔴'}</footer>
+        <footer className="p-2 text-center text-[10px] text-slate-400 no-print safe-bottom">Arte Dental © 2025 • v3.14 • {online?'🟢':'🔴'}</footer>
         {showBackup&&<BackupReminderModal onClose={()=>setShowBackup(false)}/>}
         {showSearch&&<GlobalSearchModal onClose={()=>setShowSearch(false)} onOpenPatient={openPatient} onGoTab={goTab}/>}
     </div>
