@@ -971,19 +971,19 @@ const RecordatoriosPanel=({pendientes,pts,clinic,onReload})=>{
 // Estados que se pintan sobre toda la pieza
 const TOOTH_WHOLE={
     sano:{color:'#ffffff',border:'#94a3b8',label:'Sano',dark:false},
-    endodoncia:{color:'#f59e0b',border:'#b45309',label:'Endodoncia',dark:true},
-    corona:{color:'#a855f7',border:'#7e22ce',label:'Corona',dark:true},
-    carilla:{color:'#ec4899',border:'#9d174d',label:'Carilla',dark:true},
-    inlay:{color:'#06b6d4',border:'#0e7490',label:'Inlay',dark:true},
-    onlay:{color:'#0891b2',border:'#155e75',label:'Onlay',dark:true},
-    overlay:{color:'#0e7490',border:'#0c4a6e',label:'Overlay',dark:true},
-    perno:{color:'#7c3aed',border:'#5b21b6',label:'Perno muñón',dark:true},
-    implante:{color:'#10b981',border:'#047857',label:'Implante',dark:true},
-    puente:{color:'#facc15',border:'#a16207',label:'Puente',dark:true},
-    extraccion_planificada:{color:'#fb923c',border:'#c2410c',label:'Extracción planificada',dark:true},
-    extraccion:{color:'#6b7280',border:'#374151',label:'A extraer',dark:true},
+    endodoncia:{color:'#fde68a',border:'#1e40af',label:'Endodoncia',dark:false},        // amarillo + borde azul
+    corona:{color:'#d8b4fe',border:'#eab308',label:'Corona',dark:false},                 // violeta + borde amarillo
+    carilla:{color:'#fbcfe8',border:'#059669',label:'Carilla',dark:false},               // rosa + borde verde
+    inlay:{color:'#a5f3fc',border:'#b45309',label:'Inlay',dark:false},                   // celeste + borde naranja
+    onlay:{color:'#67e8f9',border:'#dc2626',label:'Onlay',dark:false},                   // cyan + borde rojo
+    overlay:{color:'#22d3ee',border:'#9d174d',label:'Overlay',dark:false},               // cyan oscuro + borde fucsia
+    perno:{color:'#c4b5fd',border:'#ea580c',label:'Perno muñón',dark:false},             // lavanda + borde naranja
+    implante:{color:'#86efac',border:'#1e40af',label:'Implante',dark:false},             // verde + borde azul
+    puente:{color:'#fef08a',border:'#7c3aed',label:'Puente',dark:false},                 // amarillo claro + borde violeta
+    extraccion_planificada:{color:'#fed7aa',border:'#16a34a',label:'Extracción planificada',dark:false}, // naranja + borde verde
+    extraccion:{color:'#9ca3af',border:'#dc2626',label:'A extraer',dark:false},          // gris + borde rojo
     ausente:{color:'#1f2937',border:'#000',label:'Ausente',dark:true},
-    inflamacion:{color:'#dc2626',border:'#7f1d1d',label:'Inflamación periapical',dark:true,marker:'•'}
+    inflamacion:{color:'#fecaca',border:'#7c3aed',label:'Inflamación periapical',dark:false,marker:'•'} // rosa pálido + borde violeta
 };
 
 // Estados que se pintan en una cara específica
@@ -1038,8 +1038,8 @@ const ToothSVG=({n,data,onClick,selected})=>{
         <rect x="12" y="12" width="16" height="16" fill={fc('oclusal').color} stroke="#64748b" strokeWidth="0.5" onClick={e=>{e.stopPropagation();onClick(n,'oclusal',e)}}/>
 
         {wholeColored&&!isGone&&!isExtraer&&<>
-            <rect x="0" y="0" width="40" height="40" fill={whole.color} fillOpacity="0.7" pointerEvents="none"/>
-            <rect x="1.5" y="1.5" width="37" height="37" fill="none" stroke={whole.border} strokeWidth="3" pointerEvents="none"/>
+            <rect x="0" y="0" width="40" height="40" fill={whole.color} fillOpacity="0.85" pointerEvents="none"/>
+            <rect x="1.75" y="1.75" width="36.5" height="36.5" fill="none" stroke={whole.border} strokeWidth="3.5" pointerEvents="none"/>
         </>}
         {isExtraer&&<><line x1="2" y1="2" x2="38" y2="38" stroke="#dc2626" strokeWidth="3" pointerEvents="none"/><line x1="38" y1="2" x2="2" y2="38" stroke="#dc2626" strokeWidth="3" pointerEvents="none"/></>}
         {isGone&&<rect x="0" y="0" width="40" height="40" fill="#1f2937" pointerEvents="none"/>}
@@ -1058,6 +1058,8 @@ const Odontogram=({value,onChange,onSave,patient,hist,users,user,onHistReload})=
     const[noteForm,setNoteForm]=useState({pieza:'',cara:'',texto:''});
     const[generalForm,setGeneralForm]=useState({texto:'',dr:user?.role===Role.ODONTOLOGO?user.name:''});
     const[showGeneral,setShowGeneral]=useState(false);
+    const pendingChanges=useRef([]); // buffer de cambios sin guardar
+    const[pendingCount,setPendingCount]=useState(0);
 
     const PIEZAS_UP=denticion==='adulto'?UPPER:UPPER_PED;
     const PIEZAS_LO=denticion==='adulto'?LOWER:LOWER_PED;
@@ -1122,18 +1124,30 @@ const Odontogram=({value,onChange,onSave,patient,hist,users,user,onHistReload})=
         onChange(newVal);
         if(!multi)setSelPiezas(new Set());
 
-        // Registrar en history (uno solo por aplicación, agrupando si fue múltiple)
+        // Acumular cambios en buffer (NO se escriben en history hasta que se toque "Guardar")
         if(changes.length>0){
-            const dr=user?.role===Role.ODONTOLOGO?user.name:(generalForm.dr||user?.name||'');
-            const motivo=changes.length===1?`ODONTOGRAMA · ${changes[0]}`:`ODONTOGRAMA · ${changes.length} cambios: ${changes.slice(0,3).join(' | ')}${changes.length>3?`... (+${changes.length-3})`:''}`;
-            S.saveHist({paciente_id:patient.id,fecha:new Date().toLocaleDateString(),odontologo:dr,motivo,tipo:'EVOLUCION',deleted:false}).then(()=>{
-                if(onHistReload)onHistReload({silent:true});
-            });
+            pendingChanges.current.push(...changes);
+            setPendingCount(pendingChanges.current.length);
         }
     };
 
     const togglePiezaSel=(n)=>setSelPiezas(s=>{const x=new Set(s);x.has(n)?x.delete(n):x.add(n);return x});
     const clearAll=()=>{setSelPiezas(new Set());setBrush(null)};
+
+    // Al guardar: escribir en history solo los cambios que quedaron tras posibles correcciones
+    const handleSave=async()=>{
+        const changes=pendingChanges.current;
+        if(changes.length>0){
+            const dr=user?.role===Role.ODONTOLOGO?user.name:(generalForm.dr||user?.name||'');
+            const motivo=changes.length===1?`ODONTOGRAMA · ${changes[0]}`:`ODONTOGRAMA · ${changes.length} cambios: ${changes.slice(0,5).join(' | ')}${changes.length>5?`... (+${changes.length-5})`:''}`;
+            await S.saveHist({paciente_id:patient.id,fecha:new Date().toLocaleDateString(),odontologo:dr,motivo,tipo:'EVOLUCION',deleted:false});
+        }
+        // Limpiar buffer aunque no haya habido cambios (por si quedaron pendientes y se descartan)
+        pendingChanges.current=[];
+        setPendingCount(0);
+        await onSave(); // ejecutar guardado del odontograma (lo que ya hacía)
+        if(changes.length>0&&onHistReload)onHistReload({silent:true});
+    };
     const switchToMulti=v=>{setMulti(v);if(!v)setSelPiezas(new Set())};
 
     const Tooth=({n})=>{
@@ -1176,7 +1190,7 @@ const Odontogram=({value,onChange,onSave,patient,hist,users,user,onHistReload})=
     // Helper: elegir un brush
     const BrushBtn=({kind,state,label,color,border,dark,coronaTipo})=>{
         const isActive=brush&&brush.kind===kind&&brush.state===state&&(coronaTipo?brush.coronaTipo===coronaTipo:true);
-        return<button onClick={()=>setBrush(isActive?null:{kind,state,coronaTipo})} className={`p-1.5 rounded-md border-2 text-[9px] font-bold transition-all ${isActive?'ring-2 ring-brand-500 ring-offset-1 dark:ring-offset-slate-800':''}`} style={{background:color,borderColor:border,color:dark?'#fff':'#1f2937'}}>{label}</button>;
+        return<button onClick={()=>setBrush(isActive?null:{kind,state,coronaTipo})} className={`p-1.5 rounded-md text-[9px] font-bold transition-all ${isActive?'ring-2 ring-brand-500 ring-offset-1 dark:ring-offset-slate-800':''}`} style={{background:color,border:`3px solid ${border}`,color:dark?'#fff':'#1f2937'}}>{label}</button>;
     };
 
     return<div className="space-y-3 animate-fade-in">
@@ -1194,8 +1208,9 @@ const Odontogram=({value,onChange,onSave,patient,hist,users,user,onHistReload})=
                     </label>
                     {(brush||selPiezas.size>0)&&<button onClick={clearAll} className="text-[10px] text-red-500 hover:underline font-bold">✕ Limpiar</button>}
                 </div>
-                <Btn onClick={onSave} className="text-xs px-3 py-1.5"><Save size={12} className="inline mr-1"/>Guardar</Btn>
+                <Btn onClick={handleSave} className="text-xs px-3 py-1.5"><Save size={12} className="inline mr-1"/>Guardar{pendingCount>0?` (${pendingCount})`:''}</Btn>
             </div>
+            {pendingCount>0&&<p className="text-[10px] text-amber-600 dark:text-amber-400 mt-1 font-bold">⚠️ Tenés {pendingCount} cambio{pendingCount!==1?'s':''} sin guardar</p>}
             {brush&&<p className="text-[10px] text-brand-600 dark:text-brand-400 mt-2 font-bold">🖌️ Pincel activo: {brush.kind==='corona'?`Corona ${brush.coronaTipo}`:(TOOTH_WHOLE[brush.state]||TOOTH_FACE[brush.state])?.label} — Tap en {brush.kind==='face'?'una cara':'el diente'}{multi?'s seleccionados':''}</p>}
             {!brush&&<p className="text-[10px] text-slate-400 mt-2">{multi?'Tap en piezas para seleccionarlas, después elegí un estado de la paleta':'Elegí un estado de la paleta y luego tap en una pieza'}</p>}
         </Card>
@@ -3308,7 +3323,7 @@ const Admin=({user,online,onUserUpdated})=>{
 
         {tab==='audit'&&isAdmin&&<SystemAuditPanel/>}
 
-        {tab==='info'&&<div className="bg-gradient-to-br from-slate-800 to-indigo-900 p-6 rounded-xl text-white text-center"><Cloud size={40} className="mx-auto mb-2"/><h4 className="text-lg font-bold mb-2">Sistema en la Nube</h4><p className="text-white/80 text-sm mb-3">Supabase Auth + Database</p><div className={`inline-flex items-center gap-2 px-4 py-2 rounded-full ${online?'bg-emerald-500':'bg-red-500'}`}>{online?<><Wifi size={16}/>Conectado</>:<><WifiOff size={16}/>Offline</>}</div><p className="text-white/60 text-[10px] mt-3">v3.15 • Odontograma: history, toggle, contornos</p></div>}
+        {tab==='info'&&<div className="bg-gradient-to-br from-slate-800 to-indigo-900 p-6 rounded-xl text-white text-center"><Cloud size={40} className="mx-auto mb-2"/><h4 className="text-lg font-bold mb-2">Sistema en la Nube</h4><p className="text-white/80 text-sm mb-3">Supabase Auth + Database</p><div className={`inline-flex items-center gap-2 px-4 py-2 rounded-full ${online?'bg-emerald-500':'bg-red-500'}`}>{online?<><Wifi size={16}/>Conectado</>:<><WifiOff size={16}/>Offline</>}</div><p className="text-white/60 text-[10px] mt-3">v3.16 • Odontograma: history al guardar, colores contrastantes</p></div>}
     </div>
 };
 
@@ -3622,7 +3637,7 @@ const App=()=>{
             {tab==='admin'&&<Admin user={user} online={online} onUserUpdated={u=>setUser({...user,...u})}/>}
         </main>
 
-        <footer className="p-2 text-center text-[10px] text-slate-400 no-print safe-bottom">Arte Dental © 2025 • v3.15 • {online?'🟢':'🔴'}</footer>
+        <footer className="p-2 text-center text-[10px] text-slate-400 no-print safe-bottom">Arte Dental © 2025 • v3.16 • {online?'🟢':'🔴'}</footer>
         {showBackup&&<BackupReminderModal onClose={()=>setShowBackup(false)}/>}
         {showSearch&&<GlobalSearchModal onClose={()=>setShowSearch(false)} onOpenPatient={openPatient} onGoTab={goTab}/>}
     </div>
