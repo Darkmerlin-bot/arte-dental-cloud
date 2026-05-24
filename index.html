@@ -1037,7 +1037,10 @@ const ToothSVG=({n,data,onClick,selected})=>{
         <polygon points="40,0 40,40 28,28 28,12" fill={fc('distal').color} stroke="#64748b" strokeWidth="0.5" onClick={e=>{e.stopPropagation();onClick(n,'distal',e)}}/>
         <rect x="12" y="12" width="16" height="16" fill={fc('oclusal').color} stroke="#64748b" strokeWidth="0.5" onClick={e=>{e.stopPropagation();onClick(n,'oclusal',e)}}/>
 
-        {wholeColored&&!isGone&&!isExtraer&&<rect x="0" y="0" width="40" height="40" fill={whole.color} fillOpacity="0.55" stroke={whole.border} strokeWidth="2" pointerEvents="none"/>}
+        {wholeColored&&!isGone&&!isExtraer&&<>
+            <rect x="0" y="0" width="40" height="40" fill={whole.color} fillOpacity="0.7" pointerEvents="none"/>
+            <rect x="1.5" y="1.5" width="37" height="37" fill="none" stroke={whole.border} strokeWidth="3" pointerEvents="none"/>
+        </>}
         {isExtraer&&<><line x1="2" y1="2" x2="38" y2="38" stroke="#dc2626" strokeWidth="3" pointerEvents="none"/><line x1="38" y1="2" x2="2" y2="38" stroke="#dc2626" strokeWidth="3" pointerEvents="none"/></>}
         {isGone&&<rect x="0" y="0" width="40" height="40" fill="#1f2937" pointerEvents="none"/>}
         {t.general==='inflamacion'&&<circle cx="20" cy="38" r="3" fill="#dc2626" pointerEvents="none"/>}
@@ -1060,7 +1063,7 @@ const Odontogram=({value,onChange,onSave,patient,hist,users,user,onHistReload})=
     const PIEZAS_LO=denticion==='adulto'?LOWER:LOWER_PED;
     const PIEZAS_ALL=[...PIEZAS_UP,...PIEZAS_LO];
 
-    // Aplica un brush a una pieza+cara
+    // Aplica un brush a una pieza+cara. Si re-aplicás el mismo estado, lo limpia (toggle).
     const applyBrush=(n,target)=>{
         if(!brush){
             // Si no hay pincel, en modo múltiple solo selecciona; en individual abre modal viejo (deshabilitado en este rediseño - sólo selecciona)
@@ -1071,21 +1074,62 @@ const Odontogram=({value,onChange,onSave,patient,hist,users,user,onHistReload})=
         }
         const piezas=multi&&selPiezas.size>0?Array.from(selPiezas):[n];
         const newVal={...(value||{})};
+        const changes=[]; // para history
+        const labelOf=s=>(TOOTH_WHOLE[s]?.label)||(TOOTH_FACE[s]?.label)||s;
         for(const p of piezas){
             const cur=normTooth(newVal[p]);
-            let next={...cur};
-            if(brush.kind==='general'){next.general=brush.state;next.corona_tipo=undefined}
-            else if(brush.kind==='corona'){next.general='corona';next.corona_tipo=brush.coronaTipo}
-            else if(brush.kind==='face'){
+            let next={...cur,caras:{...(cur.caras||{})}};
+            let descripcion='';
+
+            if(brush.kind==='general'){
+                // Toggle: si la pieza ya tiene exactamente este estado, limpiarla
+                if(cur.general===brush.state){
+                    next.general='sano';
+                    next.corona_tipo=undefined;
+                    descripcion=`Pieza ${p}: quitar ${labelOf(brush.state)}`;
+                }else{
+                    next.general=brush.state;
+                    next.corona_tipo=undefined;
+                    descripcion=`Pieza ${p}: ${labelOf(brush.state)}`;
+                }
+            }else if(brush.kind==='corona'){
+                if(cur.general==='corona'&&cur.corona_tipo===brush.coronaTipo){
+                    next.general='sano';
+                    next.corona_tipo=undefined;
+                    descripcion=`Pieza ${p}: quitar corona ${brush.coronaTipo}`;
+                }else{
+                    next.general='corona';
+                    next.corona_tipo=brush.coronaTipo;
+                    descripcion=`Pieza ${p}: corona ${brush.coronaTipo} (${CROWN_TYPES[brush.coronaTipo]||''})`;
+                }
+            }else if(brush.kind==='face'){
                 const face=target==='general'?'oclusal':target;
-                next.caras={...cur.caras,[face]:brush.state};
+                const prevFace=cur.caras?.[face];
+                if(prevFace===brush.state){
+                    // Toggle: limpiar esa cara
+                    delete next.caras[face];
+                    descripcion=`Pieza ${p} cara ${face}: quitar ${labelOf(brush.state)}`;
+                }else{
+                    next.caras[face]=brush.state;
+                    descripcion=`Pieza ${p} cara ${face}: ${labelOf(brush.state)}`;
+                }
             }
             // limpieza
             const isClean=next.general==='sano'&&Object.values(next.caras||{}).every(v=>!v||v==='sano');
             if(isClean)delete newVal[p]; else newVal[p]=next;
+            if(descripcion)changes.push(descripcion);
         }
         onChange(newVal);
         if(!multi)setSelPiezas(new Set());
+
+        // Registrar en history (uno solo por aplicación, agrupando si fue múltiple)
+        if(changes.length>0){
+            const dr=user?.role===Role.ODONTOLOGO?user.name:(generalForm.dr||user?.name||'');
+            const motivo=changes.length===1?`ODONTOGRAMA · ${changes[0]}`:`ODONTOGRAMA · ${changes.length} cambios: ${changes.slice(0,3).join(' | ')}${changes.length>3?`... (+${changes.length-3})`:''}`;
+            S.saveHist({paciente_id:patient.id,fecha:new Date().toLocaleDateString(),odontologo:dr,motivo,tipo:'EVOLUCION',deleted:false}).then(()=>{
+                if(onHistReload)onHistReload({silent:true});
+            });
+        }
     };
 
     const togglePiezaSel=(n)=>setSelPiezas(s=>{const x=new Set(s);x.has(n)?x.delete(n):x.add(n);return x});
@@ -3264,7 +3308,7 @@ const Admin=({user,online,onUserUpdated})=>{
 
         {tab==='audit'&&isAdmin&&<SystemAuditPanel/>}
 
-        {tab==='info'&&<div className="bg-gradient-to-br from-slate-800 to-indigo-900 p-6 rounded-xl text-white text-center"><Cloud size={40} className="mx-auto mb-2"/><h4 className="text-lg font-bold mb-2">Sistema en la Nube</h4><p className="text-white/80 text-sm mb-3">Supabase Auth + Database</p><div className={`inline-flex items-center gap-2 px-4 py-2 rounded-full ${online?'bg-emerald-500':'bg-red-500'}`}>{online?<><Wifi size={16}/>Conectado</>:<><WifiOff size={16}/>Offline</>}</div><p className="text-white/60 text-[10px] mt-3">v3.14 • Auditoría + Storage WebP</p></div>}
+        {tab==='info'&&<div className="bg-gradient-to-br from-slate-800 to-indigo-900 p-6 rounded-xl text-white text-center"><Cloud size={40} className="mx-auto mb-2"/><h4 className="text-lg font-bold mb-2">Sistema en la Nube</h4><p className="text-white/80 text-sm mb-3">Supabase Auth + Database</p><div className={`inline-flex items-center gap-2 px-4 py-2 rounded-full ${online?'bg-emerald-500':'bg-red-500'}`}>{online?<><Wifi size={16}/>Conectado</>:<><WifiOff size={16}/>Offline</>}</div><p className="text-white/60 text-[10px] mt-3">v3.15 • Odontograma: history, toggle, contornos</p></div>}
     </div>
 };
 
@@ -3578,7 +3622,7 @@ const App=()=>{
             {tab==='admin'&&<Admin user={user} online={online} onUserUpdated={u=>setUser({...user,...u})}/>}
         </main>
 
-        <footer className="p-2 text-center text-[10px] text-slate-400 no-print safe-bottom">Arte Dental © 2025 • v3.14 • {online?'🟢':'🔴'}</footer>
+        <footer className="p-2 text-center text-[10px] text-slate-400 no-print safe-bottom">Arte Dental © 2025 • v3.15 • {online?'🟢':'🔴'}</footer>
         {showBackup&&<BackupReminderModal onClose={()=>setShowBackup(false)}/>}
         {showSearch&&<GlobalSearchModal onClose={()=>setShowSearch(false)} onOpenPatient={openPatient} onGoTab={goTab}/>}
     </div>
