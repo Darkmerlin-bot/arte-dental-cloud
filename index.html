@@ -233,6 +233,10 @@ const S={
     // Recetas: se guardan en history con tipo RECETA. El motivo lleva el texto completo.
     getRecetas:pid=>DB.getAll('history',{notDeleted:true,eq:{paciente_id:pid,tipo:'RECETA'},orderBy:'id',asc:false}),
     delReceta:id=>DB.update('history',id,{deleted:true}),
+    // Periodontogramas (registros fechados)
+    getPerios:pid=>DB.getAll('periodontogramas',{notDeleted:true,eq:{paciente_id:pid},orderBy:'id',asc:false}),
+    savePerio:p=>DB.insert('periodontogramas',p),
+    delPerio:id=>DB.update('periodontogramas',id,{deleted:true}),
     getImgs:async pid=>DB.getAll('images',{notDeleted:true,eq:{paciente_id:pid}}),
     saveImg:i=>DB.insert('images',i),
     updateImg:(id,patch)=>DB.update('images',id,patch),
@@ -1359,6 +1363,7 @@ const PatientHub=({user,patientId,onBack})=>{
         {id:'resumen',label:'Resumen',icon:UserIcon},
         {id:'ficha',label:'Ficha',icon:FileHeart},
         {id:'odo',label:'Odontograma',icon:Activity},
+        {id:'perio',label:'Periodontograma',icon:HeartPulse},
         {id:'historia',label:'Historia',icon:FileText},
         {id:'presup',label:'Tratamientos',icon:CreditCard},
         {id:'fotos',label:'Fotos',icon:ImageIcon},
@@ -1438,6 +1443,7 @@ const PatientHub=({user,patientId,onBack})=>{
                 {tab==='resumen'&&<PatientResumen patient={patient} medRec={medRec} hist={hist} apps={apps} treatments={treatments} saldo={saldo} onGoTab={setTab}/>}
                 {tab==='ficha'&&<PatientFicha patient={patient} medRec={medRec} user={user} onSaved={loadAll}/>}
                 {tab==='odo'&&<PatientOdo patient={patient} medRec={medRec} user={user} hist={hist} users={users} onSaved={loadAll} onHistReload={loadAll}/>}
+                {tab==='perio'&&<PatientPerio patient={patient} user={user} clinic={clinic}/>}
                 {tab==='historia'&&<PatientHistoria patient={patient} hist={hist} users={users} user={user} clinic={clinic} onReload={loadAll}/>}
                 {tab==='presup'&&<PatientTreatments patient={patient} user={user} onReload={loadAll}/>}
                 {tab==='fotos'&&<PatientFotos patient={patient} imgs={imgs} clinic={clinic} onReload={loadAll}/>}
@@ -1791,6 +1797,351 @@ const auditActionColor=(accion)=>{
 };
 
 // Recetas e indicaciones del paciente (se guardan e imprimen con membrete)
+// ===== PERIODONTOGRAMA =====
+// Sitios por diente: 3 vestibulares (distal, medio, mesial) + 3 palatinos/linguales
+const PERIO_SITES=['DV','V','MV','DP','P','MP']; // Distal-Vest, Vest, Mesial-Vest, Distal-Pal, Pal, Mesial-Pal
+const emptyTooth=()=>({ps:[0,0,0,0,0,0],mg:[0,0,0,0,0,0],sangrado:[false,false,false,false,false,false],placa:[false,false,false,false,false,false],movilidad:0,furca:0,supuracion:false,ausente:false,implante:false});
+
+const PatientPerio=({patient,user,clinic})=>{
+    const[lista,setLista]=useState([]);
+    const[loading,setLoading]=useState(true);
+    const[editing,setEditing]=useState(null); // null | objeto periodontograma en edición
+    const[viewing,setViewing]=useState(null);  // registro que se está viendo (solo lectura)
+
+    const load=async()=>{setLoading(true);const r=await S.getPerios(patient.id);setLista(r);setLoading(false)};
+    useEffect(()=>{load()},[patient.id]);
+
+    const nuevo=()=>{
+        setEditing({
+            denticion:'adulto',
+            data:{},
+            notas:'',
+            dr:user?.name||''
+        });
+    };
+
+    if(editing)return<PerioEditor patient={patient} user={user} initial={editing} onCancel={()=>setEditing(null)} onSaved={()=>{setEditing(null);load()}}/>;
+    if(viewing)return<PerioViewer patient={patient} clinic={clinic} record={viewing} user={user} onBack={()=>setViewing(null)}/>;
+
+    return<div className="space-y-3">
+        <Card className="p-3 bg-pink-50/50 dark:bg-pink-900/10 border-l-4 border-pink-500">
+            <p className="text-xs font-bold text-pink-700 dark:text-pink-300 flex items-center gap-1.5"><HeartPulse size={14}/>Periodontograma</p>
+            <p className="text-[10px] text-slate-600 dark:text-slate-400 mt-0.5">Registro del estado de las encías: profundidad de sondaje, sangrado, movilidad y más. Cada registro queda fechado para comparar la evolución.</p>
+        </Card>
+
+        <Btn onClick={nuevo} className="w-full py-2.5 text-sm"><PlusCircle size={16} className="inline mr-1"/>Nuevo periodontograma</Btn>
+
+        {loading?<Card className="p-8 text-center"><RefreshCw className="animate-spin mx-auto" size={20}/></Card>
+        :lista.length===0?<Card className="p-8 text-center text-slate-400 text-xs">
+            <HeartPulse size={32} className="mx-auto mb-2 opacity-30"/>
+            <p>Sin periodontogramas registrados</p>
+            <p className="text-[10px] mt-1">Creá uno para registrar el estado periodontal del paciente</p>
+        </Card>
+        :<div className="space-y-2">
+            {lista.map(p=>{
+                const data=p.data||{};
+                const dientes=Object.values(data);
+                const conSangrado=dientes.filter(d=>d.sangrado?.some(Boolean)).length;
+                const profundidades=dientes.flatMap(d=>d.ps||[]).filter(v=>v>0);
+                const psMax=profundidades.length?Math.max(...profundidades):0;
+                const psProm=profundidades.length?(profundidades.reduce((a,b)=>a+b,0)/profundidades.length).toFixed(1):'—';
+                return<Card key={p.id} className="p-3">
+                    <div className="flex justify-between items-start gap-2 mb-2">
+                        <div className="min-w-0 flex-1">
+                            <p className="font-bold text-sm">{p.fecha}</p>
+                            <p className="text-[10px] text-slate-500 dark:text-slate-400">Dr. {p.odontologo||'—'} · {p.denticion==='pediatrico'?'Pediátrico':'Adulto'}</p>
+                        </div>
+                        <div className="flex gap-1 shrink-0">
+                            <button onClick={()=>setViewing(p)} className="p-1.5 text-brand-500 hover:bg-brand-50 dark:hover:bg-brand-900/30 rounded" title="Ver / Imprimir"><FileText size={14}/></button>
+                            <button onClick={async()=>{if(confirm('¿Eliminar este periodontograma?')){await S.delPerio(p.id);Audit.log({accion:'Eliminó periodontograma',tabla:'periodontogramas',paciente_id:patient.id});load()}}} className="p-1.5 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30 rounded" title="Eliminar"><Trash2 size={14}/></button>
+                        </div>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2 text-center">
+                        <div className="bg-slate-50 dark:bg-slate-900/40 rounded p-1.5"><p className="text-[8px] text-slate-400 uppercase font-bold">PS Prom.</p><p className="text-sm font-bold">{psProm}<span className="text-[9px]">mm</span></p></div>
+                        <div className="bg-slate-50 dark:bg-slate-900/40 rounded p-1.5"><p className="text-[8px] text-slate-400 uppercase font-bold">PS Máx.</p><p className="text-sm font-bold text-red-600 dark:text-red-400">{psMax}<span className="text-[9px]">mm</span></p></div>
+                        <div className="bg-slate-50 dark:bg-slate-900/40 rounded p-1.5"><p className="text-[8px] text-slate-400 uppercase font-bold">Sangrado</p><p className="text-sm font-bold text-pink-600 dark:text-pink-400">{conSangrado}<span className="text-[9px]"> pzs</span></p></div>
+                    </div>
+                </Card>;
+            })}
+        </div>}
+    </div>;
+};
+
+// Editor del periodontograma
+const PerioEditor=({patient,user,initial,onCancel,onSaved})=>{
+    const[denticion,setDenticion]=useState(initial.denticion||'adulto');
+    const[data,setData]=useState(initial.data||{});
+    const[notas,setNotas]=useState(initial.notas||'');
+    const[dr,setDr]=useState(initial.dr||user?.name||'');
+    const[saving,setSaving]=useState(false);
+    const[modo,setModo]=useState('ps'); // ps | mg | sangrado | placa | otros
+    const[arcada,setArcada]=useState('superior'); // superior | inferior
+
+    const PIEZAS=denticion==='adulto'
+        ?(arcada==='superior'?UPPER:LOWER)
+        :(arcada==='superior'?UPPER_PED:LOWER_PED);
+
+    const getTooth=n=>data[n]||emptyTooth();
+    const updateTooth=(n,patch)=>setData(d=>({...d,[n]:{...getTooth(n),...patch}}));
+
+    // Cambiar un valor de sitio (ps/mg)
+    const setSiteValue=(n,field,idx,val)=>{
+        const t=getTooth(n);
+        const arr=[...(t[field]||[0,0,0,0,0,0])];
+        arr[idx]=val;
+        updateTooth(n,{[field]:arr});
+    };
+    const toggleSite=(n,field,idx)=>{
+        const t=getTooth(n);
+        const arr=[...(t[field]||[false,false,false,false,false,false])];
+        arr[idx]=!arr[idx];
+        updateTooth(n,{[field]:arr});
+    };
+
+    const save=async()=>{
+        setSaving(true);
+        const r=await S.savePerio({
+            paciente_id:patient.id,
+            fecha:new Date().toLocaleDateString('es-UY'),
+            odontologo:dr||user?.name||'',
+            denticion,
+            data,
+            notas,
+            deleted:false
+        });
+        setSaving(false);
+        if(r){
+            Audit.log({accion:'Creó periodontograma',tabla:'periodontogramas',registro_id:r.id,paciente_id:patient.id,detalles:{nombre_paciente:patient.nombre}});
+            await S.saveHist({paciente_id:patient.id,fecha:new Date().toLocaleDateString(),odontologo:dr||user?.name||'',motivo:'PERIODONTOGRAMA registrado',tipo:'SISTEMA',deleted:false});
+            toast.ok('Periodontograma guardado');
+            onSaved();
+        }
+    };
+
+    // Para entrada rápida con teclado numérico: rota por los 6 sitios de cada diente
+    const NumPad=({n,field})=>{
+        const t=getTooth(n);
+        return<div className="grid grid-cols-6 gap-0.5">
+            {PERIO_SITES.map((site,i)=><div key={i} className="flex flex-col items-center">
+                <span className="text-[7px] text-slate-400">{site}</span>
+                <input type="number" min="0" max="15" value={t[field]?.[i]||0} onChange={e=>setSiteValue(n,field,i,Math.max(0,Math.min(15,parseInt(e.target.value)||0)))} className={`w-7 h-7 text-center text-[11px] rounded border ${(t[field]?.[i]||0)>3?'bg-red-50 dark:bg-red-900/30 border-red-300 text-red-700 dark:text-red-300 font-bold':'border-slate-200 dark:border-slate-600'}`}/>
+            </div>)}
+        </div>;
+    };
+
+    return<div className="space-y-3">
+        {/* Header del editor */}
+        <Card className="p-3">
+            <div className="flex justify-between items-center gap-2 mb-3">
+                <h3 className="font-bold text-sm flex items-center gap-1.5"><HeartPulse size={16} className="text-pink-500"/>Nuevo periodontograma</h3>
+                <div className="flex gap-2">
+                    <Btn variant="secondary" onClick={onCancel} className="text-xs px-3 py-1.5">Cancelar</Btn>
+                    <Btn onClick={save} disabled={saving} className="text-xs px-3 py-1.5"><Save size={12} className="inline mr-1"/>{saving?'Guardando...':'Guardar'}</Btn>
+                </div>
+            </div>
+            <div className="grid grid-cols-2 gap-2 mb-2">
+                <div>
+                    <label className="text-[9px] font-bold text-slate-500 dark:text-slate-400 mb-1 block">Dentición</label>
+                    <Select value={denticion} onChange={e=>{setDenticion(e.target.value);setData({})}} className="text-xs py-1.5">
+                        <option value="adulto">Adulto</option>
+                        <option value="pediatrico">Pediátrico</option>
+                    </Select>
+                </div>
+                <div>
+                    <label className="text-[9px] font-bold text-slate-500 dark:text-slate-400 mb-1 block">Profesional</label>
+                    <Input value={dr} onChange={e=>setDr(e.target.value)} className="text-xs py-1.5"/>
+                </div>
+            </div>
+            {/* Selector de arcada */}
+            <div className="flex gap-1 mb-2">
+                <button onClick={()=>setArcada('superior')} className={`flex-1 py-1.5 text-[11px] rounded-lg font-bold ${arcada==='superior'?'bg-brand-600 text-white':'bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300'}`}>Arcada superior</button>
+                <button onClick={()=>setArcada('inferior')} className={`flex-1 py-1.5 text-[11px] rounded-lg font-bold ${arcada==='inferior'?'bg-brand-600 text-white':'bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300'}`}>Arcada inferior</button>
+            </div>
+            {/* Selector de parámetro */}
+            <div className="flex gap-1 overflow-x-auto scrollbar-hide">
+                {[['ps','Sondaje'],['mg','Margen/Recesión'],['sangrado','Sangrado'],['placa','Placa'],['otros','Movilidad/Furca']].map(([k,lbl])=>
+                    <button key={k} onClick={()=>setModo(k)} className={`px-2.5 py-1.5 text-[10px] rounded-lg font-bold whitespace-nowrap ${modo===k?'bg-pink-600 text-white':'bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300'}`}>{lbl}</button>
+                )}
+            </div>
+        </Card>
+
+        {/* Ayuda contextual */}
+        <Card className="p-2 bg-slate-50 dark:bg-slate-900/30">
+            <p className="text-[10px] text-slate-500 dark:text-slate-400">
+                {modo==='ps'&&'📏 Profundidad de sondaje en mm por sitio. Valores >3mm se marcan en rojo (patológico). DV/V/MV = vestibular, DP/P/MP = palatino/lingual.'}
+                {modo==='mg'&&'📐 Margen gingival / recesión en mm. Positivo = recesión (encía retraída).'}
+                {modo==='sangrado'&&'🩸 Tocá los sitios con sangrado al sondaje.'}
+                {modo==='placa'&&'🦠 Tocá los sitios con presencia de placa.'}
+                {modo==='otros'&&'🦷 Movilidad (0-3), furca (0-3), supuración y estado de cada pieza.'}
+            </p>
+        </Card>
+
+        {/* Grilla de dientes */}
+        <div className="space-y-1.5">
+            {PIEZAS.map(n=>{
+                const t=getTooth(n);
+                const tieneAlgo=t.ps?.some(v=>v>0)||t.sangrado?.some(Boolean)||t.movilidad>0||t.ausente||t.implante;
+                return<Card key={n} className={`p-2 ${t.ausente?'opacity-50':''} ${tieneAlgo&&!t.ausente?'border-l-2 border-pink-400':''}`}>
+                    <div className="flex items-center gap-2">
+                        <div className="w-9 shrink-0 text-center">
+                            <span className="text-sm font-bold">{n}</span>
+                            {t.implante&&<span className="block text-[7px] text-brand-500">IMP</span>}
+                            {t.ausente&&<span className="block text-[7px] text-red-500">AUS</span>}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                            {(modo==='ps'||modo==='mg')&&!t.ausente&&<NumPad n={n} field={modo}/>}
+                            {(modo==='sangrado'||modo==='placa')&&!t.ausente&&<div className="grid grid-cols-6 gap-0.5">
+                                {PERIO_SITES.map((site,i)=><div key={i} className="flex flex-col items-center">
+                                    <span className="text-[7px] text-slate-400">{site}</span>
+                                    <button onClick={()=>toggleSite(n,modo,i)} className={`w-7 h-7 rounded border text-[11px] ${t[modo]?.[i]?(modo==='sangrado'?'bg-red-500 border-red-600 text-white':'bg-amber-400 border-amber-500 text-white'):'border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800'}`}>{t[modo]?.[i]?'●':''}</button>
+                                </div>)}
+                            </div>}
+                            {modo==='otros'&&<div className="flex items-center gap-3 flex-wrap">
+                                <label className="flex items-center gap-1 text-[10px]">Movilidad
+                                    <Select value={String(t.movilidad||0)} onChange={e=>updateTooth(n,{movilidad:parseInt(e.target.value)})} className="w-12 text-[10px] py-0.5 px-1">
+                                        {[0,1,2,3].map(v=><option key={v} value={v}>{v}</option>)}
+                                    </Select>
+                                </label>
+                                <label className="flex items-center gap-1 text-[10px]">Furca
+                                    <Select value={String(t.furca||0)} onChange={e=>updateTooth(n,{furca:parseInt(e.target.value)})} className="w-12 text-[10px] py-0.5 px-1">
+                                        {[0,1,2,3].map(v=><option key={v} value={v}>{v}</option>)}
+                                    </Select>
+                                </label>
+                                <label className="flex items-center gap-1 text-[10px]"><input type="checkbox" checked={!!t.supuracion} onChange={e=>updateTooth(n,{supuracion:e.target.checked})}/>Supuración</label>
+                                <label className="flex items-center gap-1 text-[10px]"><input type="checkbox" checked={!!t.implante} onChange={e=>updateTooth(n,{implante:e.target.checked})}/>Implante</label>
+                                <label className="flex items-center gap-1 text-[10px]"><input type="checkbox" checked={!!t.ausente} onChange={e=>updateTooth(n,{ausente:e.target.checked})}/>Ausente</label>
+                            </div>}
+                            {t.ausente&&modo!=='otros'&&<p className="text-[10px] text-slate-400 italic">Pieza ausente</p>}
+                        </div>
+                    </div>
+                </Card>;
+            })}
+        </div>
+
+        {/* Notas */}
+        <Card className="p-3">
+            <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 mb-1 block">Notas / Diagnóstico periodontal</label>
+            <Textarea value={notas} onChange={e=>setNotas(e.target.value)} className="h-20 resize-none text-xs" placeholder="Ej: Periodontitis crónica generalizada moderada. Bolsas >5mm en sector posterior..."/>
+        </Card>
+
+        <div className="flex gap-2 pb-4">
+            <Btn onClick={save} disabled={saving} className="flex-1 py-3 text-sm">{saving?'Guardando...':'Guardar periodontograma'}</Btn>
+            <Btn variant="secondary" onClick={onCancel} className="flex-1 py-3 text-sm">Cancelar</Btn>
+        </div>
+    </div>;
+};
+
+// Visor / impresión de un periodontograma guardado
+const PerioViewer=({patient,clinic,record,user,onBack})=>{
+    const data=record.data||{};
+    const PIEZAS_UP=record.denticion==='adulto'?UPPER:UPPER_PED;
+    const PIEZAS_LO=record.denticion==='adulto'?LOWER:LOWER_PED;
+
+    const getTooth=n=>data[n]||emptyTooth();
+
+    // Estadísticas
+    const dientes=Object.values(data);
+    const profundidades=dientes.flatMap(d=>d.ps||[]).filter(v=>v>0);
+    const psProm=profundidades.length?(profundidades.reduce((a,b)=>a+b,0)/profundidades.length).toFixed(1):'0';
+    const psMax=profundidades.length?Math.max(...profundidades):0;
+    const totalSitios=dientes.flatMap(d=>d.sangrado||[]).length;
+    const sitiosSangrado=dientes.flatMap(d=>d.sangrado||[]).filter(Boolean).length;
+    const pctSangrado=totalSitios?Math.round((sitiosSangrado/totalSitios)*100):0;
+
+    const renderFila=(piezas)=><div className="overflow-x-auto"><table className="text-[9px] border-collapse" style={{minWidth:'100%'}}>
+        <thead><tr><th className="p-1 text-left sticky left-0 bg-white dark:bg-slate-800"></th>{piezas.map(n=><th key={n} className="p-1 text-center font-bold border-b border-slate-200 dark:border-slate-700" colSpan="1">{n}</th>)}</tr></thead>
+        <tbody>
+            <tr><td className="p-1 font-bold text-slate-500 sticky left-0 bg-white dark:bg-slate-800">PS</td>{piezas.map(n=>{const t=getTooth(n);return<td key={n} className="p-0.5 text-center border-r border-slate-100 dark:border-slate-700">{t.ausente?'—':(t.ps||[]).map((v,i)=><span key={i} className={v>3?'text-red-600 font-bold':''}>{v}{i<5?' ':''}</span>)}</td>})}</tr>
+            <tr><td className="p-1 font-bold text-slate-500 sticky left-0 bg-white dark:bg-slate-800">Sangr.</td>{piezas.map(n=>{const t=getTooth(n);const c=(t.sangrado||[]).filter(Boolean).length;return<td key={n} className="p-0.5 text-center">{c>0?<span className="text-red-500">●{c}</span>:''}</td>})}</tr>
+            <tr><td className="p-1 font-bold text-slate-500 sticky left-0 bg-white dark:bg-slate-800">Movil.</td>{piezas.map(n=>{const t=getTooth(n);return<td key={n} className="p-0.5 text-center">{t.movilidad>0?t.movilidad:''}</td>})}</tr>
+        </tbody>
+    </table></div>;
+
+    const imprimir=()=>{
+        const w=window.open('','_blank','width=1100,height=800');
+        if(!w)return toast.warn('Permita pop-ups');
+        const header=buildClinicHeader(clinic);
+        const filaHtml=(piezas,titulo)=>{
+            const cell=(n,field,calc)=>{const t=getTooth(n);return calc(t)};
+            return`<h3 style="margin:14px 0 4px;font-size:12px">${titulo}</h3>
+<table style="border-collapse:collapse;font-size:9px;width:100%">
+<tr><td style="font-weight:bold;padding:2px 4px">Pieza</td>${piezas.map(n=>`<td style="text-align:center;font-weight:bold;border:1px solid #ddd;padding:2px">${n}</td>`).join('')}</tr>
+<tr><td style="font-weight:bold;padding:2px 4px">Sondaje (mm)</td>${piezas.map(n=>{const t=getTooth(n);return`<td style="text-align:center;border:1px solid #ddd;padding:2px;font-size:7px">${t.ausente?'—':(t.ps||[]).map(v=>v>3?`<b style="color:#dc2626">${v}</b>`:v).join(' ')}</td>`}).join('')}</tr>
+<tr><td style="font-weight:bold;padding:2px 4px">Recesión (mm)</td>${piezas.map(n=>{const t=getTooth(n);return`<td style="text-align:center;border:1px solid #ddd;padding:2px;font-size:7px">${t.ausente?'—':(t.mg||[]).join(' ')}</td>`}).join('')}</tr>
+<tr><td style="font-weight:bold;padding:2px 4px">Sangrado</td>${piezas.map(n=>{const t=getTooth(n);const c=(t.sangrado||[]).filter(Boolean).length;return`<td style="text-align:center;border:1px solid #ddd;padding:2px;color:#dc2626">${c>0?'● '+c:''}</td>`}).join('')}</tr>
+<tr><td style="font-weight:bold;padding:2px 4px">Movilidad</td>${piezas.map(n=>{const t=getTooth(n);return`<td style="text-align:center;border:1px solid #ddd;padding:2px">${t.movilidad>0?t.movilidad:''}</td>`}).join('')}</tr>
+<tr><td style="font-weight:bold;padding:2px 4px">Furca</td>${piezas.map(n=>{const t=getTooth(n);return`<td style="text-align:center;border:1px solid #ddd;padding:2px">${t.furca>0?t.furca:''}</td>`}).join('')}</tr>
+</table>`;
+        };
+        w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Periodontograma - ${escapeHtml(patient.nombre)}</title>
+<style>
+@page{size:A4 landscape;margin:1cm}
+body{font-family:Arial,sans-serif;font-size:11px;color:#222}
+.meta{margin:10px 0;font-size:10px;background:#f5f5f5;padding:8px;border-radius:6px}
+.meta .lbl{font-weight:bold}
+.stats{display:flex;gap:16px;margin:10px 0}
+.stat{background:#f8fafc;border-radius:6px;padding:8px 14px;text-align:center;border-left:3px solid ${escapeHtml(header.color)}}
+.stat .v{font-size:18px;font-weight:bold}
+.stat .l{font-size:8px;color:#666;text-transform:uppercase}
+.toolbar{position:fixed;top:0;left:0;right:0;background:#1e293b;padding:8px;text-align:center;z-index:99}
+.toolbar button{padding:6px 16px;border:0;border-radius:6px;font-weight:bold;cursor:pointer;font-size:11px;margin:0 4px}
+.content{margin-top:44px}
+@media print{.toolbar{display:none}.content{margin-top:0}}
+.leyenda{font-size:8px;color:#666;margin-top:10px}
+</style></head><body>
+<div class="toolbar"><button onclick="window.print()" style="background:${escapeHtml(header.color)};color:#fff">🖨️ Imprimir / PDF</button><button onclick="window.close()" style="background:#fff">✕ Cerrar</button></div>
+<div class="content">
+${header.html}
+<div class="meta">
+<span class="lbl">Paciente:</span> ${escapeHtml(patient.nombre)} &nbsp;·&nbsp; <span class="lbl">CI:</span> ${formatCI(patient.ci)||'—'} &nbsp;·&nbsp; <span class="lbl">Fecha:</span> ${escapeHtml(record.fecha)} &nbsp;·&nbsp; <span class="lbl">Profesional:</span> Dr. ${escapeHtml(record.odontologo||'')}
+</div>
+<div class="stats">
+<div class="stat"><div class="v">${psProm}mm</div><div class="l">Sondaje promedio</div></div>
+<div class="stat"><div class="v" style="color:#dc2626">${psMax}mm</div><div class="l">Sondaje máximo</div></div>
+<div class="stat"><div class="v" style="color:#dc2626">${pctSangrado}%</div><div class="l">Índice de sangrado</div></div>
+</div>
+${filaHtml(PIEZAS_UP,'Arcada superior')}
+${filaHtml(PIEZAS_LO,'Arcada inferior')}
+${record.notas?`<div style="margin-top:14px"><b>Notas / Diagnóstico:</b><br/>${escapeHtml(record.notas)}</div>`:''}
+<div class="leyenda">Cada pieza muestra 6 sitios (3 vestibulares + 3 palatinos/linguales). Valores de sondaje >3mm en rojo indican posible patología. Movilidad y furca: escala 0-3.</div>
+<div style="margin-top:40px;text-align:right;font-size:10px"><div style="display:inline-block;border-top:1px solid #333;padding-top:5px;min-width:220px;text-align:center">Dr/a ${escapeHtml(record.odontologo||'')}</div></div>
+</div></body></html>`);
+        w.document.close();
+        Audit.consentPrinted&&Audit.log({accion:'Imprimió periodontograma',tabla:'periodontogramas',paciente_id:patient.id});
+    };
+
+    return<div className="space-y-3">
+        <Card className="p-3 flex justify-between items-center gap-2">
+            <div>
+                <button onClick={onBack} className="text-[11px] text-brand-600 dark:text-brand-400 font-bold flex items-center gap-1"><ChevronLeft size={14}/>Volver</button>
+                <p className="font-bold text-sm mt-1">{record.fecha}</p>
+                <p className="text-[10px] text-slate-500 dark:text-slate-400">Dr. {record.odontologo||'—'}</p>
+            </div>
+            <Btn onClick={imprimir} className="text-xs px-3 py-2"><Printer size={14} className="inline mr-1"/>Imprimir</Btn>
+        </Card>
+
+        <div className="grid grid-cols-3 gap-2">
+            <Card className="p-3 text-center"><p className="text-[8px] text-slate-400 uppercase font-bold">Sondaje prom.</p><p className="text-lg font-bold">{psProm}<span className="text-xs">mm</span></p></Card>
+            <Card className="p-3 text-center"><p className="text-[8px] text-slate-400 uppercase font-bold">Sondaje máx.</p><p className="text-lg font-bold text-red-600 dark:text-red-400">{psMax}<span className="text-xs">mm</span></p></Card>
+            <Card className="p-3 text-center"><p className="text-[8px] text-slate-400 uppercase font-bold">Índice sangrado</p><p className="text-lg font-bold text-pink-600 dark:text-pink-400">{pctSangrado}<span className="text-xs">%</span></p></Card>
+        </div>
+
+        <Card className="p-3">
+            <p className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase mb-2">Arcada superior</p>
+            {renderFila(PIEZAS_UP)}
+        </Card>
+        <Card className="p-3">
+            <p className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase mb-2">Arcada inferior</p>
+            {renderFila(PIEZAS_LO)}
+        </Card>
+
+        {record.notas&&<Card className="p-3">
+            <p className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase mb-1">Notas / Diagnóstico</p>
+            <p className="text-xs whitespace-pre-wrap">{record.notas}</p>
+        </Card>}
+    </div>;
+};
+
 const PatientRecetas=({patient,user,clinic})=>{
     const[recetas,setRecetas]=useState([]);
     const[loading,setLoading]=useState(true);
@@ -3613,7 +3964,7 @@ const Admin=({user,online,onUserUpdated})=>{
 
         {tab==='reportes'&&isAdmin&&<ReportsPanel/>}
 
-        {tab==='info'&&<div className="bg-gradient-to-br from-slate-800 to-indigo-900 p-6 rounded-xl text-white text-center"><Cloud size={40} className="mx-auto mb-2"/><h4 className="text-lg font-bold mb-2">Sistema en la Nube</h4><p className="text-white/80 text-sm mb-3">Supabase Auth + Database</p><div className={`inline-flex items-center gap-2 px-4 py-2 rounded-full ${online?'bg-emerald-500':'bg-red-500'}`}>{online?<><Wifi size={16}/>Conectado</>:<><WifiOff size={16}/>Offline</>}</div><p className="text-white/60 text-[10px] mt-3">v3.17 • Seguridad, performance, recetas, reportes</p></div>}
+        {tab==='info'&&<div className="bg-gradient-to-br from-slate-800 to-indigo-900 p-6 rounded-xl text-white text-center"><Cloud size={40} className="mx-auto mb-2"/><h4 className="text-lg font-bold mb-2">Sistema en la Nube</h4><p className="text-white/80 text-sm mb-3">Supabase Auth + Database</p><div className={`inline-flex items-center gap-2 px-4 py-2 rounded-full ${online?'bg-emerald-500':'bg-red-500'}`}>{online?<><Wifi size={16}/>Conectado</>:<><WifiOff size={16}/>Offline</>}</div><p className="text-white/60 text-[10px] mt-3">v3.18 • Periodontograma</p></div>}
     </div>
 };
 
@@ -3927,7 +4278,7 @@ const App=()=>{
             {tab==='admin'&&<Admin user={user} online={online} onUserUpdated={u=>setUser({...user,...u})}/>}
         </main>
 
-        <footer className="p-2 text-center text-[10px] text-slate-400 no-print safe-bottom">Arte Dental © 2025 • v3.17 • {online?'🟢':'🔴'}</footer>
+        <footer className="p-2 text-center text-[10px] text-slate-400 no-print safe-bottom">Arte Dental © 2025 • v3.18 • {online?'🟢':'🔴'}</footer>
         {showBackup&&<BackupReminderModal onClose={()=>setShowBackup(false)}/>}
         {showSearch&&<GlobalSearchModal onClose={()=>setShowSearch(false)} onOpenPatient={openPatient} onGoTab={goTab}/>}
     </div>
