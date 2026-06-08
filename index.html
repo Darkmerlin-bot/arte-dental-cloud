@@ -230,6 +230,9 @@ const S={
     delApp:id=>DB.update('appointments',id,{deleted:true}),
     getHist:async pid=>DB.getAll('history',{notDeleted:true,eq:{paciente_id:pid},orderBy:'id',asc:false}),
     saveHist:h=>DB.insert('history',h),
+    // Recetas: se guardan en history con tipo RECETA. El motivo lleva el texto completo.
+    getRecetas:pid=>DB.getAll('history',{notDeleted:true,eq:{paciente_id:pid,tipo:'RECETA'},orderBy:'id',asc:false}),
+    delReceta:id=>DB.update('history',id,{deleted:true}),
     getImgs:async pid=>DB.getAll('images',{notDeleted:true,eq:{paciente_id:pid}}),
     saveImg:i=>DB.insert('images',i),
     updateImg:(id,patch)=>DB.update('images',id,patch),
@@ -237,6 +240,14 @@ const S={
     getMed:async pid=>{const{data}=await supabase.from('medical_records').select('*').eq('paciente_id',pid).maybeSingle();return data},
     saveMed:async r=>{const ex=await S.getMed(r.paciente_id);return ex?DB.update('medical_records',ex.id,r):DB.insert('medical_records',r)},
     hasCond:async pid=>{const r=await S.getMed(pid);if(!r)return false;return(r.alergias?.length>0)||(r.alergias_medicamentos?.length>0)||(r.medicacion_actual?.length>0)||Object.entries(r.antecedentes_personales||{}).some(([k,v])=>k!=='otros'&&v===true)},
+    // Versión optimizada: trae TODAS las fichas en una sola query y arma el mapa {pacienteId: bool}
+    getCondMap:async()=>{
+        const recs=await DB.getAll('medical_records');
+        const map={};
+        const evalCond=r=>(r.alergias?.length>0)||(r.alergias_medicamentos?.length>0)||(r.medicacion_actual?.length>0)||Object.entries(r.antecedentes_personales||{}).some(([k,v])=>k!=='otros'&&v===true);
+        for(const r of recs){if(r.paciente_id!=null)map[r.paciente_id]=evalCond(r)}
+        return map;
+    },
     export:async()=>JSON.stringify({
         patients:await DB.getAll('patients'),
         appointments:await DB.getAll('appointments'),
@@ -358,6 +369,17 @@ const deletePhotoFromStorage=async(path)=>{
     if(!path)return;
     try{await supabase.storage.from(STORAGE_BUCKET).remove([path])}catch(e){console.warn('No se pudo borrar de storage',e)}
 };
+// Escapa caracteres peligrosos para insertar texto seguro en ventanas de impresión
+const escapeHtml=s=>{
+    if(s===null||s===undefined)return '';
+    return String(s)
+        .replace(/&/g,'&amp;')
+        .replace(/</g,'&lt;')
+        .replace(/>/g,'&gt;')
+        .replace(/"/g,'&quot;')
+        .replace(/'/g,'&#039;');
+};
+
 const formatCI=ci=>{if(!ci)return '';const nums=String(ci).replace(/\D/g,'');if(nums.length<=1)return nums;if(nums.length<=4)return nums.replace(/(\d{1})(\d{1,3})/,'$1.$2');if(nums.length<=7)return nums.replace(/(\d{1})(\d{3})(\d{1,3})/,'$1.$2.$3');return nums.replace(/(\d{1})(\d{3})(\d{3})(\d{1})/,'$1.$2.$3-$4').substring(0,12)};
 const calcEdad=fn=>{if(!fn)return null;const b=new Date(fn);if(isNaN(b))return null;const t=new Date();let a=t.getFullYear()-b.getFullYear();const m=t.getMonth()-b.getMonth();if(m<0||(m===0&&t.getDate()<b.getDate()))a--;return a};
 const MESES_ES=['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
@@ -822,7 +844,7 @@ const Agenda=({user,onOpenPatient})=>{
     const[clinic,setClinic]=useState(null);
 
     useEffect(()=>{load()},[]);
-    const load=async()=>{const[a,p,u,c]=await Promise.all([S.getApps(),S.getPatients(),S.getUsers(),S.getClinicConfig()]);setApps(a);setPts(p);setUsers(u);setClinic(c);const cc={};for(const pt of p)cc[pt.id]=await S.hasCond(pt.id);setCond(cc)};
+    const load=async()=>{const[a,p,u,c,cc]=await Promise.all([S.getApps(),S.getPatients(),S.getUsers(),S.getClinicConfig(),S.getCondMap()]);setApps(a);setPts(p);setUsers(u);setClinic(c);setCond(cc)};
 
     const odontologos=users.filter(u=>u.role===Role.ODONTOLOGO);
 
@@ -1342,6 +1364,7 @@ const PatientHub=({user,patientId,onBack})=>{
         {id:'fotos',label:'Fotos',icon:ImageIcon},
         {id:'citas',label:'Citas',icon:Calendar},
         {id:'consent',label:'Consentimientos',icon:ClipboardList},
+        {id:'recetas',label:'Recetas',icon:Pill},
         {id:'audit',label:'Auditoría',icon:Shield}
     ];
 
@@ -1420,6 +1443,7 @@ const PatientHub=({user,patientId,onBack})=>{
                 {tab==='fotos'&&<PatientFotos patient={patient} imgs={imgs} clinic={clinic} onReload={loadAll}/>}
                 {tab==='citas'&&<PatientCitas patient={patient} apps={apps} onReload={loadAll}/>}
                 {tab==='consent'&&<PatientConsents patient={patient} user={user}/>}
+                {tab==='recetas'&&<PatientRecetas patient={patient} user={user} clinic={clinic}/>}
                 {tab==='audit'&&<PatientAudit patient={patient}/>}
             </div>
         </div>
@@ -1552,13 +1576,13 @@ const buildClinicHeader=(clinic)=>{
     
     return{
         color,
-        html:`<div class="header" style="border-bottom:3px solid ${color};padding-bottom:12px;margin-bottom:18px;display:flex;align-items:center;gap:14px">
-${logo?`<img src="${logo}" style="width:56px;height:56px;object-fit:contain;flex-shrink:0"/>`:''}
+        html:`<div class="header" style="border-bottom:3px solid ${escapeHtml(color)};padding-bottom:12px;margin-bottom:18px;display:flex;align-items:center;gap:14px">
+${logo?`<img src="${escapeHtml(logo)}" style="width:56px;height:56px;object-fit:contain;flex-shrink:0"/>`:''}
 <div style="flex:1">
-<h1 style="font-size:18px;font-weight:bold;color:${color};margin:0">${nombre}</h1>
-${subtitulo?`<p style="font-size:10px;color:#666;margin:2px 0 0">${subtitulo}${ubicacion?' — '+ubicacion:''}</p>`:''}
-${contacto?`<p style="font-size:10px;color:#666;margin:2px 0 0">${contacto}</p>`:''}
-${rut?`<p style="font-size:10px;color:#666;margin:2px 0 0">RUT: ${rut}</p>`:''}
+<h1 style="font-size:18px;font-weight:bold;color:${escapeHtml(color)};margin:0">${escapeHtml(nombre)}</h1>
+${subtitulo?`<p style="font-size:10px;color:#666;margin:2px 0 0">${escapeHtml(subtitulo)}${ubicacion?' — '+escapeHtml(ubicacion):''}</p>`:''}
+${contacto?`<p style="font-size:10px;color:#666;margin:2px 0 0">${escapeHtml(contacto)}</p>`:''}
+${rut?`<p style="font-size:10px;color:#666;margin:2px 0 0">RUT: ${escapeHtml(rut)}</p>`:''}
 </div>
 </div>`
     };
@@ -1594,7 +1618,7 @@ const PrintHistoryModal=({patient,hist,users,clinic,onClose})=>{
         const edad=calcEdad(patient.fecha_nacimiento);
         const fechaFmt=d=>{const dt=parseFechaUY(d);return dt?dt.toLocaleDateString('es-UY'):d};
         const header=buildClinicHeader(clinic);
-        const html=`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Historial - ${patient.nombre}</title>
+        const html=`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Historial - ${escapeHtml(patient.nombre)}</title>
 <style>
 @page{size:A4;margin:1.5cm}
 body{font-family:Arial,Helvetica,sans-serif;font-size:11px;color:#222;line-height:1.4}
@@ -1638,13 +1662,13 @@ tr.SISTEMA td{background:#f1f5f9;font-style:italic;color:#64748b}
 <div class="content">
 ${header.html}
 <div class="meta">
-<div><span class="lbl">Paciente:</span> ${patient.nombre||''}</div>
+<div><span class="lbl">Paciente:</span> ${escapeHtml(patient.nombre)}</div>
 <div><span class="lbl">CI:</span> ${formatCI(patient.ci)||'—'}${edad!==null?` &nbsp;·&nbsp; <span class="lbl" style="width:auto">Edad:</span> ${edad} años`:''}</div>
-${patient.telefono?`<div><span class="lbl">Teléfono:</span> ${patient.telefono}</div>`:''}
-${patient.direccion?`<div><span class="lbl">Domicilio:</span> ${patient.direccion}</div>`:''}
+${patient.telefono?`<div><span class="lbl">Teléfono:</span> ${escapeHtml(patient.telefono)}</div>`:''}
+${patient.direccion?`<div><span class="lbl">Domicilio:</span> ${escapeHtml(patient.direccion)}</div>`:''}
 <div style="margin-top:6px;border-top:1px dashed #cbd5e1;padding-top:6px">
 <div><span class="lbl">Período:</span> ${new Date(from).toLocaleDateString('es-UY')} al ${new Date(to).toLocaleDateString('es-UY')}</div>
-<div><span class="lbl">Filtro:</span> ${tipoLabel}${odo!=='TODOS'?` &nbsp;·&nbsp; Dr. ${odo}`:''}</div>
+<div><span class="lbl">Filtro:</span> ${tipoLabel}${odo!=='TODOS'?` &nbsp;·&nbsp; Dr. ${escapeHtml(odo)}`:''}</div>
 <div><span class="lbl">Emisión:</span> ${today.toLocaleDateString('es-UY')} ${today.toLocaleTimeString('es-UY',{hour:'2-digit',minute:'2-digit'})}</div>
 </div>
 </div>
@@ -1654,7 +1678,7 @@ ${filtered.length===0?'<div class="empty">No hay movimientos en el período sele
 <table>
 <thead><tr><th style="width:80px">Fecha</th><th style="width:80px">Tipo</th><th style="width:100px">Odontólogo</th><th>Detalle</th></tr></thead>
 <tbody>
-${filtered.map(h=>`<tr class="${h.tipo}"><td>${fechaFmt(h.fecha)}</td><td><span class="tipo-tag tipo-${h.tipo}">${h.tipo}</span></td><td>${h.odontologo||'—'}</td><td>${(h.motivo||'').replace(/</g,'&lt;')}</td></tr>`).join('')}
+${filtered.map(h=>`<tr class="${escapeHtml(h.tipo)}"><td>${fechaFmt(h.fecha)}</td><td><span class="tipo-tag tipo-${escapeHtml(h.tipo)}">${escapeHtml(h.tipo)}</span></td><td>${escapeHtml(h.odontologo)||'—'}</td><td>${escapeHtml(h.motivo)}</td></tr>`).join('')}
 </tbody>
 </table>`}
 
@@ -1764,6 +1788,123 @@ const auditActionColor=(accion)=>{
     if(/^Registr|^Aplic|pago/i.test(accion))return'bg-brand-100 dark:bg-brand-900/30 text-brand-700 dark:text-brand-400';
     if(/Subió|Imprimió/.test(accion))return'bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-400';
     return'bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300';
+};
+
+// Recetas e indicaciones del paciente (se guardan e imprimen con membrete)
+const PatientRecetas=({patient,user,clinic})=>{
+    const[recetas,setRecetas]=useState([]);
+    const[loading,setLoading]=useState(true);
+    const[showForm,setShowForm]=useState(false);
+    const[texto,setTexto]=useState('');
+    const[dr,setDr]=useState(user?.name||'');
+    const[saving,setSaving]=useState(false);
+
+    const load=async()=>{setLoading(true);const r=await S.getRecetas(patient.id);setRecetas(r);setLoading(false)};
+    useEffect(()=>{load()},[patient.id]);
+
+    const save=async()=>{
+        if(!texto.trim())return toast.warn('Escribí la receta o indicación');
+        setSaving(true);
+        const r=await S.saveHist({paciente_id:patient.id,fecha:new Date().toLocaleDateString(),odontologo:dr||user?.name||'',motivo:texto.trim(),tipo:'RECETA',deleted:false});
+        setSaving(false);
+        if(r){
+            Audit.log({accion:'Creó receta',tabla:'history',paciente_id:patient.id,detalles:{nombre_paciente:patient.nombre}});
+            setTexto('');setShowForm(false);load();
+            toast.ok('Receta guardada');
+        }
+    };
+
+    const del=async(r)=>{
+        if(!confirm('¿Eliminar esta receta?'))return;
+        await S.delReceta(r.id);
+        Audit.log({accion:'Eliminó receta',tabla:'history',paciente_id:patient.id,detalles:{nombre_paciente:patient.nombre}});
+        load();
+    };
+
+    const imprimir=(r)=>{
+        const w=window.open('','_blank','width=800,height=900');
+        if(!w)return toast.warn('Permita pop-ups para imprimir');
+        const header=buildClinicHeader(clinic);
+        const edad=calcEdad(patient.fecha_nacimiento);
+        const fechaImpr=new Date().toLocaleDateString('es-UY');
+        w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Receta - ${escapeHtml(patient.nombre)}</title>
+<style>
+@page{size:A5;margin:1.2cm}
+body{font-family:Arial,Helvetica,sans-serif;font-size:12px;color:#222;line-height:1.5}
+.meta{margin:14px 0;font-size:11px}
+.meta .lbl{font-weight:bold;color:#555}
+.rx{font-size:42px;font-weight:bold;color:${escapeHtml(header.color)};font-family:Georgia,serif;margin:10px 0 4px}
+.cuerpo{white-space:pre-wrap;font-size:13px;min-height:7cm;border-bottom:1px solid #ddd;padding-bottom:20px;line-height:1.7}
+.firma{margin-top:40px;text-align:right}
+.firma .linea{display:inline-block;border-top:1px solid #333;padding-top:5px;min-width:220px;text-align:center;font-size:11px}
+.toolbar{position:fixed;top:0;left:0;right:0;background:#1e293b;padding:10px;display:flex;justify-content:center;gap:10px;z-index:99}
+.toolbar button{padding:8px 18px;border:0;border-radius:6px;font-weight:bold;cursor:pointer;font-size:11px}
+.toolbar .print-btn{background:${escapeHtml(header.color)};color:#fff}
+.toolbar .close-btn{background:#fff;color:#1e293b}
+.content{margin-top:50px}
+@media print{.toolbar{display:none}.content{margin-top:0}body{padding:0}}
+</style></head><body>
+<div class="toolbar">
+<button class="print-btn" onclick="window.print()">🖨️ Imprimir / Guardar PDF</button>
+<button class="close-btn" onclick="window.close()">✕ Cerrar</button>
+</div>
+<div class="content">
+${header.html}
+<div class="meta">
+<div><span class="lbl">Paciente:</span> ${escapeHtml(patient.nombre)}${edad!==null?` (${edad} años)`:''}</div>
+<div><span class="lbl">CI:</span> ${formatCI(patient.ci)||'—'}</div>
+<div><span class="lbl">Fecha:</span> ${escapeHtml(r.fecha)||fechaImpr}</div>
+</div>
+<div class="rx">℞</div>
+<div class="cuerpo">${escapeHtml(r.motivo)}</div>
+<div class="firma"><div class="linea">Dr/a ${escapeHtml(r.odontologo||'')}${user?.registro_msp?`<br/>Reg. MSP: ${escapeHtml(user.registro_msp)}`:''}</div></div>
+</div>
+</body></html>`);
+        w.document.close();
+        Audit.log({accion:'Imprimió receta',tabla:'history',paciente_id:patient.id,detalles:{nombre_paciente:patient.nombre}});
+    };
+
+    return<div className="space-y-3">
+        {!showForm&&<Btn onClick={()=>{setTexto('');setDr(user?.name||'');setShowForm(true)}} className="w-full py-2.5 text-sm"><PlusCircle size={16} className="inline mr-1"/>Nueva receta / indicación</Btn>}
+
+        {showForm&&<Card className="p-4 space-y-3">
+            <h3 className="font-bold text-sm flex items-center gap-1.5"><Pill size={16} className="text-brand-600 dark:text-brand-400"/>Nueva receta / indicación</h3>
+            <div>
+                <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 mb-1 block">Profesional</label>
+                <Input value={dr} onChange={e=>setDr(e.target.value)} placeholder="Nombre del odontólogo"/>
+            </div>
+            <div>
+                <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 mb-1 block">Contenido</label>
+                <Textarea value={texto} onChange={e=>setTexto(e.target.value)} className="h-40 resize-none text-sm" placeholder={"Ej:\n\nAmoxicilina 875mg\n1 comprimido cada 12hs por 7 días\n\nIbuprofeno 600mg\n1 comprimido cada 8hs si hay dolor\n\nIndicaciones:\n- Reposo relativo 24hs\n- No enjuagar las primeras 24hs"}/>
+                <p className="text-[9px] text-slate-400 mt-1">Escribí libremente medicamentos, dosis e indicaciones. Se imprime con el membrete de la clínica.</p>
+            </div>
+            <div className="flex gap-2">
+                <Btn onClick={save} disabled={saving} className="flex-1 py-2.5 text-sm">{saving?'Guardando...':'Guardar'}</Btn>
+                <Btn variant="secondary" onClick={()=>setShowForm(false)} className="flex-1 py-2.5 text-sm">Cancelar</Btn>
+            </div>
+        </Card>}
+
+        {loading?<Card className="p-8 text-center"><RefreshCw className="animate-spin mx-auto" size={20}/></Card>
+        :recetas.length===0&&!showForm?<Card className="p-8 text-center text-slate-400 text-xs">
+            <Pill size={32} className="mx-auto mb-2 opacity-30"/>
+            <p>Sin recetas registradas</p>
+            <p className="text-[10px] mt-1">Creá una receta o indicación para imprimirla con membrete</p>
+        </Card>
+        :<div className="space-y-2">
+            {recetas.map(r=><Card key={r.id} className="p-3">
+                <div className="flex justify-between items-start gap-2 mb-2">
+                    <div className="min-w-0 flex-1">
+                        <p className="text-[10px] font-bold text-slate-500 dark:text-slate-400">{r.fecha} · Dr. {r.odontologo||'—'}</p>
+                    </div>
+                    <div className="flex gap-1 shrink-0">
+                        <button onClick={()=>imprimir(r)} className="p-1.5 text-brand-500 hover:bg-brand-50 dark:hover:bg-brand-900/30 rounded" title="Imprimir"><Printer size={14}/></button>
+                        <button onClick={()=>del(r)} className="p-1.5 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30 rounded" title="Eliminar"><Trash2 size={14}/></button>
+                    </div>
+                </div>
+                <p className="text-xs whitespace-pre-wrap line-clamp-4 text-slate-700 dark:text-slate-300">{r.motivo}</p>
+            </Card>)}
+        </div>}
+    </div>;
 };
 
 const PatientAudit=({patient})=>{
@@ -1965,7 +2106,7 @@ const PatientFotos=({patient,imgs,clinic,onReload})=>{
         const edad=calcEdad(patient.fecha_nacimiento);
         const today=new Date();
         const header=buildClinicHeader(clinic);
-        const html=`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Fotos - ${patient.nombre}</title>
+        const html=`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Fotos - ${escapeHtml(patient.nombre)}</title>
 <style>
 @page{size:A4;margin:1.5cm}
 body{font-family:Arial,Helvetica,sans-serif;font-size:11px;color:#222}
@@ -1992,14 +2133,14 @@ h2{font-size:13px;color:#1e293b;border-bottom:1px solid #cbd5e1;padding-bottom:4
 <div class="content">
 ${header.html}
 <div class="meta">
-<div><span class="lbl">Paciente:</span> ${patient.nombre||''}</div>
+<div><span class="lbl">Paciente:</span> ${escapeHtml(patient.nombre)}</div>
 <div><span class="lbl">CI:</span> ${formatCI(patient.ci)||'—'}${edad!==null?` &nbsp;·&nbsp; <span class="lbl" style="width:auto">Edad:</span> ${edad} años`:''}</div>
 <div><span class="lbl">Emisión:</span> ${today.toLocaleDateString('es-UY')}</div>
 <div><span class="lbl">Total fotos:</span> ${fotos.length}</div>
 </div>
 <h2>Galería fotográfica</h2>
 <div class="grid">
-${fotos.map((f,idx)=>`<div class="foto"><img src="${imgSrc(f)}"/><div class="cap"><span class="num">Foto ${idx+1}</span> · ${f.date||'—'}</div></div>`).join('')}
+${fotos.map((f,idx)=>`<div class="foto"><img src="${escapeHtml(imgSrc(f))}"/><div class="cap"><span class="num">Foto ${idx+1}</span> · ${escapeHtml(f.date)||'—'}</div></div>`).join('')}
 </div>
 </div>
 </body></html>`;
@@ -2141,7 +2282,7 @@ const ConsentModal=({tpl,patient,user,onClose,onSaved})=>{
         await registrar(true); // silencioso al imprimir
         const w=window.open('','_blank','width=900,height=700');
         if(!w)return toast.err('Habilitá ventanas emergentes');
-        w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${tpl.titulo} - ${patient.nombre}</title><style>
+        w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapeHtml(tpl.titulo)} - ${escapeHtml(patient.nombre)}</title><style>
             @page{size:A4;margin:2cm}
             body{font-family:Georgia,'Times New Roman',serif;font-size:11pt;line-height:1.5;color:#000;max-width:18cm;margin:0 auto;padding:1cm}
             pre{white-space:pre-wrap;font-family:inherit;font-size:inherit;margin:0}
@@ -2156,7 +2297,7 @@ const ConsentModal=({tpl,patient,user,onClose,onSaved})=>{
         setTimeout(()=>{
             const w=window.open('','_blank','width=900,height=700');
             if(!w)return;
-            w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${tpl.titulo} - ${patient.nombre}</title><style>
+            w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapeHtml(tpl.titulo)} - ${escapeHtml(patient.nombre)}</title><style>
                 @page{size:A4;margin:2cm}
                 body{font-family:Georgia,'Times New Roman',serif;font-size:11pt;line-height:1.5;color:#000;max-width:18cm;margin:0 auto;padding:1cm}
                 pre{white-space:pre-wrap;font-family:inherit;font-size:inherit;margin:0}
@@ -2863,7 +3004,7 @@ const PatientsList=({user,onOpen})=>{
     const[cond,setCond]=useState({});const[saving,setSaving]=useState(false);const[ciDisplay,setCiDisplay]=useState('');const[showForm,setShowForm]=useState(false);
 
     useEffect(()=>{load()},[]);
-    const load=async()=>{const p=await S.getPatients();setPts(p);const c={};for(const pt of p)c[pt.id]=await S.hasCond(pt.id);setCond(c)};
+    const load=async()=>{const[p,c]=await Promise.all([S.getPatients(),S.getCondMap()]);setPts(p);setCond(c)};
     const handleCIChange=e=>{const raw=e.target.value.replace(/\D/g,'').substring(0,8);setForm({...form,ci:raw});setCiDisplay(formatCI(raw))};
     const blank={nombre:'',ci:'',telefono:'',email:'',fecha_nacimiento:'',direccion:''};
     const submit=async()=>{
@@ -2976,6 +3117,152 @@ const TemplatesPanel=()=>{
 
 // ===== ADMIN =====
 // Panel de auditoría del sistema (solo admin)
+// Panel de reportes exportables (CSV) - solo admin
+const ReportsPanel=()=>{
+    const[loading,setLoading]=useState(false);
+    const[stats,setStats]=useState(null);
+    const[year,setYear]=useState(new Date().getFullYear());
+
+    // Helper: parsear fecha dd/mm/yyyy o ISO
+    const parseDate=s=>{
+        if(!s)return null;
+        if(/^\d{4}-\d{2}-\d{2}/.test(s))return new Date(s);
+        const m=/^(\d{1,2})\/(\d{1,2})\/(\d{4})/.exec(s);
+        if(m)return new Date(parseInt(m[3]),parseInt(m[2])-1,parseInt(m[1]));
+        return new Date(s);
+    };
+    const extractMonto=motivo=>{const m=/\$\s?(\d+(?:[.,]\d+)?)/.exec(motivo||'');return m?parseFloat(m[1].replace(',','.')):0};
+
+    // Descargar un CSV
+    const downloadCSV=(filename,rows)=>{
+        const csv=rows.map(r=>r.map(cell=>{
+            const s=String(cell??'');
+            // Escapar comillas y envolver si tiene coma/comilla/salto
+            return /[",\n]/.test(s)?`"${s.replace(/"/g,'""')}"`:s;
+        }).join(',')).join('\n');
+        const blob=new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8;'}); // BOM para que Excel abra bien los acentos
+        const url=URL.createObjectURL(blob);
+        const a=document.createElement('a');a.href=url;a.download=filename;a.click();
+        setTimeout(()=>URL.revokeObjectURL(url),1000);
+    };
+
+    // Cargar estadísticas resumidas para mostrar en pantalla
+    const loadStats=async()=>{
+        setLoading(true);
+        const[pts,trs,hist,apps]=await Promise.all([
+            S.getPatients(),
+            DB.getAll('treatments',{notDeleted:true}),
+            DB.getAll('history',{notDeleted:true}),
+            S.getApps()
+        ]);
+        // Ingresos por mes del año seleccionado
+        const ingresosPorMes=Array(12).fill(0);
+        hist.filter(h=>h.tipo==='PAGO').forEach(h=>{
+            const d=parseDate(h.fecha);
+            if(d&&d.getFullYear()===year)ingresosPorMes[d.getMonth()]+=extractMonto(h.motivo);
+        });
+        const totalAnual=ingresosPorMes.reduce((a,b)=>a+b,0);
+        // Tratamientos por tipo
+        const tratCount={};
+        trs.forEach(t=>{const k=(t.descripcion||'').trim();if(k)tratCount[k]=(tratCount[k]||0)+1});
+        // Citas del año
+        const citasAnio=apps.filter(a=>{const d=new Date(a.fecha);return d.getFullYear()===year}).length;
+        const asistidas=apps.filter(a=>{const d=new Date(a.fecha);return d.getFullYear()===year&&a.asistio===true}).length;
+
+        setStats({pts,trs,hist,apps,ingresosPorMes,totalAnual,tratCount,citasAnio,asistidas});
+        setLoading(false);
+    };
+    useEffect(()=>{loadStats()},[year]);
+
+    // ===== Generadores de CSV =====
+    const exportPacientes=()=>{
+        const rows=[['CI','Nombre','Teléfono','Email','Dirección','Fecha nacimiento','Fecha alta']];
+        stats.pts.forEach(p=>rows.push([formatCI(p.ci),p.nombre,p.telefono,p.email,p.direccion,p.fecha_nacimiento,p.created_at?.slice(0,10)]));
+        downloadCSV(`pacientes_${new Date().toISOString().slice(0,10)}.csv`,rows);
+        Audit.log({accion:'Exportó reporte de pacientes',tabla:'system'});
+    };
+
+    const exportIngresos=()=>{
+        const MESES=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+        const rows=[['Mes',`Ingresos ${year} ($)`]];
+        stats.ingresosPorMes.forEach((v,i)=>rows.push([MESES[i],v]));
+        rows.push(['TOTAL',stats.totalAnual]);
+        downloadCSV(`ingresos_${year}.csv`,rows);
+        Audit.log({accion:'Exportó reporte de ingresos',tabla:'system',detalles:{year}});
+    };
+
+    const exportTratamientos=()=>{
+        const rows=[['Tratamiento','Cantidad de veces']];
+        Object.entries(stats.tratCount).sort((a,b)=>b[1]-a[1]).forEach(([k,v])=>rows.push([k,v]));
+        downloadCSV(`tratamientos_${new Date().toISOString().slice(0,10)}.csv`,rows);
+        Audit.log({accion:'Exportó reporte de tratamientos',tabla:'system'});
+    };
+
+    const exportDeudores=()=>{
+        const ptMap=Object.fromEntries(stats.pts.map(p=>[p.id,p]));
+        const debts={};
+        stats.trs.forEach(t=>{
+            if(t.estado==='rechazado'||t.estado==='abandonado')return;
+            const por=Math.max(0,(parseFloat(t.cantidad)||0)*(parseFloat(t.precio_unit)||0)-(parseFloat(t.pagado)||0));
+            if(por>0)debts[t.paciente_id]=(debts[t.paciente_id]||0)+por;
+        });
+        const rows=[['CI','Paciente','Teléfono','Saldo pendiente ($)']];
+        Object.entries(debts).map(([pid,amt])=>({p:ptMap[pid],amt})).filter(x=>x.p).sort((a,b)=>b.amt-a.amt)
+            .forEach(({p,amt})=>rows.push([formatCI(p.ci),p.nombre,p.telefono,amt]));
+        downloadCSV(`deudores_${new Date().toISOString().slice(0,10)}.csv`,rows);
+        Audit.log({accion:'Exportó reporte de deudores',tabla:'system'});
+    };
+
+    const years=[];for(let y=new Date().getFullYear();y>=2023;y--)years.push(y);
+
+    return<div className="space-y-3">
+        <Card className="p-3">
+            <div className="flex items-center gap-2 mb-1"><BarChart3 size={16} className="text-cyan-600 dark:text-cyan-400"/><h3 className="font-bold text-sm">Reportes</h3></div>
+            <p className="text-[10px] text-slate-400">Exportá los datos a CSV (se abre en Excel, Google Sheets, etc.)</p>
+        </Card>
+
+        {loading||!stats?<Card className="p-8 text-center"><RefreshCw className="animate-spin mx-auto" size={20}/></Card>:<>
+            {/* Resumen del año */}
+            <Card className="p-4">
+                <div className="flex items-center justify-between mb-3">
+                    <h4 className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">Resumen {year}</h4>
+                    <Select value={String(year)} onChange={e=>setYear(parseInt(e.target.value))} className="w-auto text-xs py-1">
+                        {years.map(y=><option key={y} value={y}>{y}</option>)}
+                    </Select>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                    <div className="bg-emerald-50 dark:bg-emerald-900/20 rounded-lg p-3">
+                        <p className="text-[9px] font-bold text-emerald-600 dark:text-emerald-400 uppercase">Ingresos del año</p>
+                        <p className="text-lg font-bold text-emerald-700 dark:text-emerald-300">${stats.totalAnual.toLocaleString('es-UY')}</p>
+                    </div>
+                    <div className="bg-brand-50 dark:bg-brand-900/20 rounded-lg p-3">
+                        <p className="text-[9px] font-bold text-brand-600 dark:text-brand-400 uppercase">Citas del año</p>
+                        <p className="text-lg font-bold text-brand-700 dark:text-brand-300">{stats.citasAnio}</p>
+                        <p className="text-[9px] text-slate-400">{stats.asistidas} asistidas</p>
+                    </div>
+                    <div className="bg-slate-50 dark:bg-slate-900/40 rounded-lg p-3">
+                        <p className="text-[9px] font-bold text-slate-500 uppercase">Pacientes totales</p>
+                        <p className="text-lg font-bold text-slate-700 dark:text-slate-300">{stats.pts.length}</p>
+                    </div>
+                    <div className="bg-slate-50 dark:bg-slate-900/40 rounded-lg p-3">
+                        <p className="text-[9px] font-bold text-slate-500 uppercase">Tratamientos cargados</p>
+                        <p className="text-lg font-bold text-slate-700 dark:text-slate-300">{stats.trs.length}</p>
+                    </div>
+                </div>
+            </Card>
+
+            {/* Botones de exportación */}
+            <Card className="p-4 space-y-2">
+                <h4 className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase mb-1">Descargar CSV</h4>
+                <Btn variant="secondary" onClick={exportPacientes} className="w-full py-2.5 text-sm justify-start"><Users size={14} className="inline mr-2"/>Listado de pacientes ({stats.pts.length})</Btn>
+                <Btn variant="secondary" onClick={exportIngresos} className="w-full py-2.5 text-sm justify-start"><DollarSign size={14} className="inline mr-2"/>Ingresos por mes ({year})</Btn>
+                <Btn variant="secondary" onClick={exportTratamientos} className="w-full py-2.5 text-sm justify-start"><CreditCard size={14} className="inline mr-2"/>Tratamientos por tipo</Btn>
+                <Btn variant="secondary" onClick={exportDeudores} className="w-full py-2.5 text-sm justify-start"><AlertTriangle size={14} className="inline mr-2"/>Deudores (saldos pendientes)</Btn>
+            </Card>
+        </>}
+    </div>;
+};
+
 const SystemAuditPanel=()=>{
     const[logs,setLogs]=useState([]);
     const[loading,setLoading]=useState(true);
@@ -3120,6 +3407,7 @@ const Admin=({user,online,onUserUpdated})=>{
             {isAdmin&&tabBtn('templates','Plantillas','bg-amber-600')}
             {tabBtn('backup','Backup','bg-emerald-600')}
             {isAdmin&&tabBtn('audit','Auditoría','bg-slate-600')}
+            {isAdmin&&tabBtn('reportes','Reportes','bg-cyan-600')}
             {tabBtn('info','Sistema','bg-indigo-600')}
         </div>
 
@@ -3323,7 +3611,9 @@ const Admin=({user,online,onUserUpdated})=>{
 
         {tab==='audit'&&isAdmin&&<SystemAuditPanel/>}
 
-        {tab==='info'&&<div className="bg-gradient-to-br from-slate-800 to-indigo-900 p-6 rounded-xl text-white text-center"><Cloud size={40} className="mx-auto mb-2"/><h4 className="text-lg font-bold mb-2">Sistema en la Nube</h4><p className="text-white/80 text-sm mb-3">Supabase Auth + Database</p><div className={`inline-flex items-center gap-2 px-4 py-2 rounded-full ${online?'bg-emerald-500':'bg-red-500'}`}>{online?<><Wifi size={16}/>Conectado</>:<><WifiOff size={16}/>Offline</>}</div><p className="text-white/60 text-[10px] mt-3">v3.16 • Odontograma: history al guardar, colores contrastantes</p></div>}
+        {tab==='reportes'&&isAdmin&&<ReportsPanel/>}
+
+        {tab==='info'&&<div className="bg-gradient-to-br from-slate-800 to-indigo-900 p-6 rounded-xl text-white text-center"><Cloud size={40} className="mx-auto mb-2"/><h4 className="text-lg font-bold mb-2">Sistema en la Nube</h4><p className="text-white/80 text-sm mb-3">Supabase Auth + Database</p><div className={`inline-flex items-center gap-2 px-4 py-2 rounded-full ${online?'bg-emerald-500':'bg-red-500'}`}>{online?<><Wifi size={16}/>Conectado</>:<><WifiOff size={16}/>Offline</>}</div><p className="text-white/60 text-[10px] mt-3">v3.17 • Seguridad, performance, recetas, reportes</p></div>}
     </div>
 };
 
@@ -3637,7 +3927,7 @@ const App=()=>{
             {tab==='admin'&&<Admin user={user} online={online} onUserUpdated={u=>setUser({...user,...u})}/>}
         </main>
 
-        <footer className="p-2 text-center text-[10px] text-slate-400 no-print safe-bottom">Arte Dental © 2025 • v3.16 • {online?'🟢':'🔴'}</footer>
+        <footer className="p-2 text-center text-[10px] text-slate-400 no-print safe-bottom">Arte Dental © 2025 • v3.17 • {online?'🟢':'🔴'}</footer>
         {showBackup&&<BackupReminderModal onClose={()=>setShowBackup(false)}/>}
         {showSearch&&<GlobalSearchModal onClose={()=>setShowSearch(false)} onOpenPatient={openPatient} onGoTab={goTab}/>}
     </div>
