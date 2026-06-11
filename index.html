@@ -291,6 +291,17 @@ const S={
     delTreatment:id=>DB.update('treatments',id,{deleted:true}),
     // Comentarios por tratamiento
     getTreatmentComments:tid=>DB.getAll('treatment_comments',{eq:{treatment_id:tid},orderBy:'created_at',asc:true}),
+    // Conteo de comentarios para varios tratamientos en UNA sola query (evita N+1)
+    getCommentCounts:async tids=>{
+        if(!tids||!tids.length)return{};
+        try{
+            const{data,error}=await supabase.from('treatment_comments').select('treatment_id').in('treatment_id',tids);
+            if(error)throw error;
+            const m={};
+            for(const r of data||[])m[r.treatment_id]=(m[r.treatment_id]||0)+1;
+            return m;
+        }catch(e){console.warn('getCommentCounts',e);return{}}
+    },
     addTreatmentComment:c=>DB.insert('treatment_comments',c),
     delTreatmentComment:id=>DB.delete('treatment_comments',id),
     // Configuración de clínica (singleton id=1)
@@ -407,6 +418,48 @@ const Toasts=()=>{
     return<div className="fixed top-3 right-3 left-3 sm:left-auto z-[100] space-y-2 pointer-events-none safe-top sm:max-w-sm">
         {items.map(t=>{const{bg,Icon}=cfg[t.type];return<div key={t.id} className={`${bg} text-white px-3 py-2.5 rounded-xl shadow-lg flex items-center gap-2 text-sm font-medium pointer-events-auto animate-fade-in`}><Icon size={18} className="shrink-0"/><span className="flex-1 break-words">{t.msg}</span><button onClick={()=>close(t.id)} className="text-white/80 hover:text-white shrink-0"><X size={14}/></button></div>})}
     </div>
+};
+
+// ===== CONFIRMACIÓN PROPIA (reemplaza window.confirm) =====
+let _confirmSetState=null;
+let _confirmResolver=null;
+// Uso: if(await appConfirm('¿Eliminar paciente?'))...
+// Opciones: {title, okLabel, cancelLabel, danger}
+const appConfirm=(msg,opts={})=>new Promise(res=>{
+    if(!_confirmSetState){res(window.confirm(msg));return} // fallback si el host no está montado
+    _confirmResolver=res;
+    _confirmSetState({open:true,msg,title:opts.title||'Confirmar',okLabel:opts.okLabel||'Confirmar',cancelLabel:opts.cancelLabel||'Cancelar',danger:opts.danger!==false});
+});
+
+const ConfirmHost=()=>{
+    const[st,setSt]=useState({open:false});
+    useEffect(()=>{_confirmSetState=setSt;return()=>{_confirmSetState=null}},[]);
+    const close=val=>{setSt({open:false});if(_confirmResolver){const r=_confirmResolver;_confirmResolver=null;r(val)}};
+    // Escape = cancelar
+    useEffect(()=>{
+        if(!st.open)return;
+        const onKey=e=>{if(e.key==='Escape')close(false);if(e.key==='Enter')close(true)};
+        document.addEventListener('keydown',onKey);
+        return()=>document.removeEventListener('keydown',onKey);
+    },[st.open]);
+    if(!st.open)return null;
+    return<Portal><div className="fixed inset-0 bg-black/60 z-[400] flex items-center justify-center p-4" onClick={()=>close(false)}>
+        <div className="bg-white dark:bg-slate-800 w-full max-w-sm rounded-2xl p-5 animate-fade-in shadow-2xl" onClick={e=>e.stopPropagation()}>
+            <div className="flex items-start gap-3 mb-3">
+                <div className={`p-2.5 rounded-full shrink-0 ${st.danger?'bg-red-100 dark:bg-red-900/40':'bg-brand-100 dark:bg-brand-900/40'}`}>
+                    {st.danger?<AlertTriangle size={22} className="text-red-600 dark:text-red-400"/>:<CheckCircle2 size={22} className="text-brand-600 dark:text-brand-400"/>}
+                </div>
+                <div className="min-w-0 flex-1">
+                    <h3 className="font-bold text-sm">{st.title}</h3>
+                    <p className="text-xs text-slate-600 dark:text-slate-300 mt-1 whitespace-pre-wrap">{st.msg}</p>
+                </div>
+            </div>
+            <div className="flex gap-2">
+                <Btn variant="secondary" onClick={()=>close(false)} className="flex-1 py-2.5 text-sm">{st.cancelLabel}</Btn>
+                <button onClick={()=>close(true)} className={`flex-1 py-2.5 text-sm font-bold rounded-xl text-white ${st.danger?'bg-red-600 hover:bg-red-700':'bg-brand-600 hover:bg-brand-700'}`}>{st.okLabel}</button>
+            </div>
+        </div>
+    </div></Portal>;
 };
 
 // ===== LOGIN =====
@@ -690,7 +743,7 @@ const SlotModal=({slot,apps,pts,users,cond,user,onClose,onSaved})=>{
     };
 
     const toggle=async(id,val)=>{const a=apps.find(x=>x.id===id);if(a){await S.saveApp({...a,asistio:val});const p=pts.find(x=>x.id===a.paciente_id);Audit.log({accion:val===true?'Marcó cita como asistida':val===false?'Marcó cita como no asistida':'Editó cita',tabla:'appointments',registro_id:a.id,paciente_id:a.paciente_id,detalles:{fecha:a.fecha,hora:a.hora}});onSaved()}};
-    const del=async(id)=>{if(confirm('¿Eliminar cita?')){const a=apps.find(x=>x.id===id);await S.delApp(id);if(a){const p=pts.find(x=>x.id===a.paciente_id);Audit.appointmentDeleted(a,p)}onSaved();onClose()}};
+    const del=async(id)=>{if(await appConfirm('¿Eliminar cita?')){const a=apps.find(x=>x.id===id);await S.delApp(id);if(a){const p=pts.find(x=>x.id===a.paciente_id);Audit.appointmentDeleted(a,p)}onSaved();onClose()}};
 
     return<Portal><div className="fixed inset-0 bg-black/60 z-[200] flex items-end sm:items-center justify-center p-0 sm:p-4" onClick={onClose}>
         <div className="bg-white dark:bg-slate-800 w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl p-5 max-h-[90vh] overflow-auto animate-slide-in" onClick={e=>e.stopPropagation()}>
@@ -1211,7 +1264,7 @@ const Odontogram=({value,onChange,onSave,patient,hist,users,user,onHistReload})=
         if(r){setGeneralForm({texto:'',dr:user?.role===Role.ODONTOLOGO?user.name:''});setShowGeneral(false);toast.ok('Tratamiento guardado');if(onHistReload)onHistReload()}
     };
 
-    const delNota=async h=>{if(!confirm('¿Eliminar esta nota?'))return;await DB.update('history',h.id,{deleted:true});if(onHistReload)onHistReload()};
+    const delNota=async h=>{if(!await appConfirm('¿Eliminar esta nota?'))return;await DB.update('history',h.id,{deleted:true});if(onHistReload)onHistReload()};
 
     // Helper: elegir un brush
     const BrushBtn=({kind,state,label,color,border,dark,coronaTipo})=>{
@@ -1853,7 +1906,7 @@ const PatientPerio=({patient,user,clinic})=>{
                         </div>
                         <div className="flex gap-1 shrink-0">
                             <button onClick={()=>setViewing(p)} className="p-1.5 text-brand-500 hover:bg-brand-50 dark:hover:bg-brand-900/30 rounded" title="Ver / Imprimir"><FileText size={14}/></button>
-                            <button onClick={async()=>{if(confirm('¿Eliminar este periodontograma?')){await S.delPerio(p.id);Audit.log({accion:'Eliminó periodontograma',tabla:'periodontogramas',paciente_id:patient.id});load()}}} className="p-1.5 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30 rounded" title="Eliminar"><Trash2 size={14}/></button>
+                            <button onClick={async()=>{if(await appConfirm('¿Eliminar este periodontograma?')){await S.delPerio(p.id);Audit.log({accion:'Eliminó periodontograma',tabla:'periodontogramas',paciente_id:patient.id});load()}}} className="p-1.5 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30 rounded" title="Eliminar"><Trash2 size={14}/></button>
                         </div>
                     </div>
                     <div className="grid grid-cols-3 gap-2 text-center">
@@ -2166,7 +2219,7 @@ const PatientRecetas=({patient,user,clinic})=>{
     };
 
     const del=async(r)=>{
-        if(!confirm('¿Eliminar esta receta?'))return;
+        if(!await appConfirm('¿Eliminar esta receta?'))return;
         await S.delReceta(r.id);
         Audit.log({accion:'Eliminó receta',tabla:'history',paciente_id:patient.id,detalles:{nombre_paciente:patient.nombre}});
         load();
@@ -2441,7 +2494,7 @@ const PatientFotos=({patient,imgs,clinic,onReload})=>{
     const exitSelect=()=>{setSelectMode(false);setSelected(new Set())};
 
     const delPhoto=async(i)=>{
-        if(!confirm('¿Borrar?'))return;
+        if(!await appConfirm('¿Borrar?'))return;
         // Borrar de Storage si existe
         if(i.storage_path)await deletePhotoFromStorage(i.storage_path);
         await S.delImg(i.id);
@@ -2545,7 +2598,7 @@ const PatientCitas=({patient,apps,onReload})=>{
                     <div className="flex gap-1 shrink-0">
                         <button onClick={()=>toggle(a.id,true)} className={`p-1.5 rounded ${a.asistio===true?'bg-emerald-600 text-white':'bg-slate-100 dark:bg-slate-700 text-slate-400'}`}><UserCheck size={14}/></button>
                         <button onClick={()=>toggle(a.id,false)} className={`p-1.5 rounded ${a.asistio===false?'bg-red-600 text-white':'bg-slate-100 dark:bg-slate-700 text-slate-400'}`}><UserX size={14}/></button>
-                        <button onClick={async()=>{if(confirm('¿Eliminar?')){await S.delApp(a.id);onReload()}}} className="p-1.5 text-red-400"><Trash2 size={14}/></button>
+                        <button onClick={async()=>{if(await appConfirm('¿Eliminar?')){await S.delApp(a.id);onReload()}}} className="p-1.5 text-red-400"><Trash2 size={14}/></button>
                     </div>
                 </div>
             </div>})}
@@ -2747,13 +2800,13 @@ const PatientConsents=({patient,user})=>{
     };
 
     const removeFoto=async rec=>{
-        if(!confirm('¿Quitar foto del documento firmado?'))return;
+        if(!await appConfirm('¿Quitar foto del documento firmado?'))return;
         await S.updateConsentRecord(rec.id,{foto_firmado:null});
         load();
     };
 
     const delRecord=async rec=>{
-        if(!confirm(`¿Eliminar registro de "${rec.titulo}"?`))return;
+        if(!await appConfirm(`¿Eliminar registro de "${rec.titulo}"?`))return;
         if(await S.delConsentRecord(rec.id)){toast.ok('Eliminado');load()}
     };
 
@@ -3055,7 +3108,7 @@ const CommentsModal=({treatment,user,onClose,onChanged})=>{
         setSaving(false);
         if(r){setTexto('');load();if(onChanged)onChanged()}
     };
-    const del=async(c)=>{if(!confirm('¿Eliminar este comentario?'))return;await S.delTreatmentComment(c.id);load();if(onChanged)onChanged()};
+    const del=async(c)=>{if(!await appConfirm('¿Eliminar este comentario?'))return;await S.delTreatmentComment(c.id);load();if(onChanged)onChanged()};
     return<Portal><div className="fixed inset-0 bg-black/60 z-[200] flex items-center justify-center p-2 sm:p-4" onClick={onClose}>
         <div className="bg-white dark:bg-slate-800 w-full sm:max-w-md rounded-2xl flex flex-col animate-fade-in" style={{maxHeight:'calc(100vh - 1rem)'}} onClick={e=>e.stopPropagation()}>
             <div className="flex justify-between items-center p-4 border-b border-slate-200 dark:border-slate-700 shrink-0">
@@ -3103,9 +3156,8 @@ const PatientTreatments=({patient,user,onReload})=>{
         if(!silent)setLoading(true);
         const ts=await S.getTreatments(patient.id);
         setTreatments(ts);
-        // Cargar contadores de comentarios en paralelo
-        const counts={};
-        await Promise.all(ts.map(async t=>{const cs=await S.getTreatmentComments(t.id);counts[t.id]=cs.length}));
+        // Contadores de comentarios en UNA sola query (antes era 1 por tratamiento)
+        const counts=await S.getCommentCounts(ts.map(t=>t.id));
         setCommentCounts(counts);
         if(firstLoad.current){setLoading(false);firstLoad.current=false}
     };
@@ -3152,7 +3204,7 @@ const PatientTreatments=({patient,user,onReload})=>{
     };
 
     const delTreatment=async(t)=>{
-        if(!confirm(`¿Eliminar tratamiento "${t.descripcion}"? Los pagos quedan en el historial.`))return;
+        if(!await appConfirm(`¿Eliminar tratamiento "${t.descripcion}"? Los pagos quedan en el historial.`))return;
         const backup=treatments;
         setTreatments(arr=>arr.filter(x=>x.id!==t.id));
         const ok=await S.delTreatment(t.id);
@@ -3372,7 +3424,7 @@ const PatientsList=({user,onOpen})=>{
             }
         }finally{setSaving(false)}
     };
-    const delPatient=async(p,e)=>{e.stopPropagation();if(!confirm(`¿Eliminar a ${p.nombre}?`))return;if(!confirm('¿Seguro? No se puede deshacer'))return;await S.delPatient(p.id);Audit.patientDeleted(p);load()};
+    const delPatient=async(p,e)=>{e.stopPropagation();if(!await appConfirm(`¿Eliminar a ${p.nombre}?`))return;if(!await appConfirm('¿Seguro? No se puede deshacer'))return;await S.delPatient(p.id);Audit.patientDeleted(p);load()};
     const editPatient=(p,e)=>{e.stopPropagation();setEditId(p.id);setForm({nombre:p.nombre,ci:p.ci,telefono:p.telefono||'',email:p.email||'',fecha_nacimiento:p.fecha_nacimiento||'',direccion:p.direccion||''});setCiDisplay(formatCI(p.ci));setShowForm(true)};
     const filtered=pts.filter(p=>(p.nombre||'').toLowerCase().includes(search.toLowerCase())||(p.ci||'').includes(search));
 
@@ -3420,7 +3472,7 @@ const TemplatesPanel=()=>{
         setSaving(false);
         if(r){toast.ok('Plantilla guardada');setEdit(null);load()}
     };
-    const del=async t=>{if(!confirm(`¿Eliminar plantilla "${t.titulo}"?`))return;if(await S.delTemplate(t.id)){toast.ok('Eliminada');load()}};
+    const del=async t=>{if(!await appConfirm(`¿Eliminar plantilla "${t.titulo}"?`))return;if(await S.delTemplate(t.id)){toast.ok('Eliminada');load()}};
     const toggle=async t=>{await S.saveTemplate({...t,activo:!t.activo});load()};
 
     if(edit)return<Card className="p-4 space-y-3">
@@ -3487,7 +3539,9 @@ const ReportsPanel=()=>{
     // Descargar un CSV
     const downloadCSV=(filename,rows)=>{
         const csv=rows.map(r=>r.map(cell=>{
-            const s=String(cell??'');
+            let s=String(cell??'');
+            // Anti CSV-injection: si empieza con = + - @, anteponer ' para que Excel no lo ejecute como fórmula
+            if(/^[=+\-@]/.test(s)&&typeof cell!=='number')s="'"+s;
             // Escapar comillas y envolver si tiene coma/comilla/salto
             return /[",\n]/.test(s)?`"${s.replace(/"/g,'""')}"`:s;
         }).join(',')).join('\n');
@@ -3776,7 +3830,7 @@ const Admin=({user,online,onUserUpdated})=>{
                     {!editId&&<p className="text-[10px] text-amber-600 dark:text-amber-400">⚠️ Desactivá "Confirm email" en Supabase</p>}
                 </div>
             </Card>
-            <Card className="overflow-hidden divide-y divide-slate-200 dark:divide-slate-700">{users.map(u=><div key={u.id} className="p-3 flex justify-between items-center"><div><p className="font-bold text-sm">{u.name}</p><p className="text-[10px] text-slate-400">@{u.username} • {u.email} • {u.role}{u.registro_msp?` • Reg: ${u.registro_msp}`:''}</p></div><div className="flex gap-1"><button onClick={()=>{setEditId(u.id);setUForm({name:u.name,username:u.username,email:u.email||'',password:'',role:u.role})}} className="p-2 text-brand-500"><Edit2 size={14}/></button><button onClick={async()=>{if(u.email===user.email)return toast.warn('No podés eliminarte');if(confirm('¿Eliminar? (Borrá también la cuenta en Auth manualmente)')){const ok=await S.delUser(u.id);if(ok){setUsers(await S.getUsers());toast.ok('Eliminado')}}}} className="p-2 text-red-400"><Trash2 size={14}/></button></div></div>)}</Card>
+            <Card className="overflow-hidden divide-y divide-slate-200 dark:divide-slate-700">{users.map(u=><div key={u.id} className="p-3 flex justify-between items-center"><div><p className="font-bold text-sm">{u.name}</p><p className="text-[10px] text-slate-400">@{u.username} • {u.email} • {u.role}{u.registro_msp?` • Reg: ${u.registro_msp}`:''}</p></div><div className="flex gap-1"><button onClick={()=>{setEditId(u.id);setUForm({name:u.name,username:u.username,email:u.email||'',password:'',role:u.role})}} className="p-2 text-brand-500"><Edit2 size={14}/></button><button onClick={async()=>{if(u.email===user.email)return toast.warn('No podés eliminarte');if(await appConfirm('¿Eliminar? (Borrá también la cuenta en Auth manualmente)')){const ok=await S.delUser(u.id);if(ok){setUsers(await S.getUsers());toast.ok('Eliminado')}}}} className="p-2 text-red-400"><Trash2 size={14}/></button></div></div>)}</Card>
         </div>}
 
         {tab==='profile'&&<Card className="p-4 space-y-3">
@@ -3957,14 +4011,14 @@ const Admin=({user,online,onUserUpdated})=>{
                 </>;
             })()}
             <Card className="p-6 text-center"><Download size={32} className="mx-auto text-brand-600 dark:text-brand-400 mb-2"/><h4 className="font-bold mb-2">Exportar</h4><p className="text-[10px] text-slate-400 mb-3">Pacientes, citas, historial, fichas, fotos, tratamientos, consentimientos, configuración</p><Btn onClick={async()=>{const d=await S.export();const b=new Blob([d],{type:'application/json'});const u=URL.createObjectURL(b);const a=document.createElement('a');a.href=u;a.download='ArteDental_Backup_'+todayStr()+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(u),1000);markBackupDone();Audit.backupExported();toast.ok('Backup descargado')}} className="w-full py-3 text-sm">Descargar backup</Btn></Card>
-            <Card className="p-6 text-center"><Upload size={32} className="mx-auto text-emerald-600 dark:text-emerald-400 mb-2"/><h4 className="font-bold mb-2">Importar</h4><p className="text-[10px] text-slate-400 mb-3">⚠️ Esto puede sobrescribir datos. Hacé backup antes.</p><input type="file" ref={fileRef} accept=".json" className="hidden" onChange={async e=>{const f=e.target.files[0];if(!f)return;if(!confirm('¿Cargar este backup? Los datos actuales pueden ser sobrescritos.'))return;const r=new FileReader();r.onload=async ev=>{if(await S.import(ev.target.result)){Audit.backupImported();toast.ok('Importado, recargando...');setTimeout(()=>window.location.reload(),1500)}};r.readAsText(f)}}/><Btn variant="success" onClick={()=>fileRef.current.click()} className="w-full py-3 text-sm">Cargar backup</Btn></Card>
+            <Card className="p-6 text-center"><Upload size={32} className="mx-auto text-emerald-600 dark:text-emerald-400 mb-2"/><h4 className="font-bold mb-2">Importar</h4><p className="text-[10px] text-slate-400 mb-3">⚠️ Esto puede sobrescribir datos. Hacé backup antes.</p><input type="file" ref={fileRef} accept=".json" className="hidden" onChange={async e=>{const f=e.target.files[0];if(!f)return;if(!await appConfirm('¿Cargar este backup? Los datos actuales pueden ser sobrescritos.'))return;const r=new FileReader();r.onload=async ev=>{if(await S.import(ev.target.result)){Audit.backupImported();toast.ok('Importado, recargando...');setTimeout(()=>window.location.reload(),1500)}};r.readAsText(f)}}/><Btn variant="success" onClick={()=>fileRef.current.click()} className="w-full py-3 text-sm">Cargar backup</Btn></Card>
         </div>}
 
         {tab==='audit'&&isAdmin&&<SystemAuditPanel/>}
 
         {tab==='reportes'&&isAdmin&&<ReportsPanel/>}
 
-        {tab==='info'&&<div className="bg-gradient-to-br from-slate-800 to-indigo-900 p-6 rounded-xl text-white text-center"><Cloud size={40} className="mx-auto mb-2"/><h4 className="text-lg font-bold mb-2">Sistema en la Nube</h4><p className="text-white/80 text-sm mb-3">Supabase Auth + Database</p><div className={`inline-flex items-center gap-2 px-4 py-2 rounded-full ${online?'bg-emerald-500':'bg-red-500'}`}>{online?<><Wifi size={16}/>Conectado</>:<><WifiOff size={16}/>Offline</>}</div><p className="text-white/60 text-[10px] mt-3">v3.18 • Periodontograma</p></div>}
+        {tab==='info'&&<div className="bg-gradient-to-br from-slate-800 to-indigo-900 p-6 rounded-xl text-white text-center"><Cloud size={40} className="mx-auto mb-2"/><h4 className="text-lg font-bold mb-2">Sistema en la Nube</h4><p className="text-white/80 text-sm mb-3">Supabase Auth + Database</p><div className={`inline-flex items-center gap-2 px-4 py-2 rounded-full ${online?'bg-emerald-500':'bg-red-500'}`}>{online?<><Wifi size={16}/>Conectado</>:<><WifiOff size={16}/>Offline</>}</div><p className="text-white/60 text-[10px] mt-3">v3.19 • Seguridad RLS, confirmaciones, CSV, performance</p></div>}
     </div>
 };
 
@@ -4251,6 +4305,7 @@ const App=()=>{
 
     return<div className="min-h-screen flex flex-col">
         <Toasts/>
+        <ConfirmHost/>
         {showPass&&<Portal><div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[200] p-4"><Card className="w-full max-w-xs p-5"><h3 className="font-bold text-brand-600 dark:text-brand-400 mb-3">Cambiar mi Contraseña</h3><Input id="np" type="password" placeholder="Nueva (mín. 6)" className="mb-3"/><div className="flex gap-2"><Btn onClick={async()=>{const np=document.getElementById('np').value;const r=await S.changeOwnPassword(np);if(r.ok){setShowPass(false);toast.ok('Contraseña cambiada')}else toast.warn(r.err)}} className="flex-1 py-2 text-sm">Guardar</Btn><Btn variant="secondary" onClick={()=>setShowPass(false)} className="flex-1 py-2 text-sm">Cancelar</Btn></div></Card></div></Portal>}
 
         <header className="bg-slate-800 dark:bg-slate-950 text-white p-3 safe-top no-print border-b border-slate-700">
@@ -4278,7 +4333,7 @@ const App=()=>{
             {tab==='admin'&&<Admin user={user} online={online} onUserUpdated={u=>setUser({...user,...u})}/>}
         </main>
 
-        <footer className="p-2 text-center text-[10px] text-slate-400 no-print safe-bottom">Arte Dental © 2025 • v3.18 • {online?'🟢':'🔴'}</footer>
+        <footer className="p-2 text-center text-[10px] text-slate-400 no-print safe-bottom">Arte Dental © 2025 • v3.19 • {online?'🟢':'🔴'}</footer>
         {showBackup&&<BackupReminderModal onClose={()=>setShowBackup(false)}/>}
         {showSearch&&<GlobalSearchModal onClose={()=>setShowSearch(false)} onOpenPatient={openPatient} onGoTab={goTab}/>}
     </div>
