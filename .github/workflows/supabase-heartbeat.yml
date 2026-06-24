@@ -1,1 +1,32 @@
+# ============================================================
+# Arte Dental — Heartbeat anti-pausa de Supabase
+# Corre cada 3 días: hace un SELECT real a la tabla heartbeat
+# para que Supabase cuente actividad y NO pause el proyecto.
+# Ubicación en el repo: .github/workflows/supabase-heartbeat.yml
+# ============================================================
+name: Supabase Heartbeat
 
+on:
+  schedule:
+    # Cada 3 días a las 12:00 UTC (09:00 Uruguay aprox.)
+    - cron: '0 12 */3 * *'
+  workflow_dispatch:   # permite ejecutarlo a mano desde la pestaña Actions
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Supabase (SELECT a heartbeat)
+        run: |
+          echo "Pinging Supabase heartbeat table..."
+          HTTP_CODE=$(curl -s -o /tmp/resp.txt -w "%{http_code}" \
+            "${{ secrets.SUPABASE_URL }}/rest/v1/heartbeat?select=last_ping&limit=1" \
+            -H "apikey: ${{ secrets.SUPABASE_ANON_KEY }}" \
+            -H "Authorization: Bearer ${{ secrets.SUPABASE_ANON_KEY }}")
+          echo "HTTP status: $HTTP_CODE"
+          echo "Response: $(cat /tmp/resp.txt)"
+          if [ "$HTTP_CODE" -ne 200 ]; then
+            echo "::error::Heartbeat falló (HTTP $HTTP_CODE). Revisá la URL, la key y la policy de la tabla heartbeat."
+            exit 1
+          fi
+          echo "✅ Heartbeat OK — Supabase recibió actividad."
