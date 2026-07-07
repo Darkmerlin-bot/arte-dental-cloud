@@ -1,1 +1,44 @@
+# ============================================================
+# Arte Dental — Heartbeat anti-pausa de Supabase (v2)
+# Ahora hace un UPDATE (escritura) en lugar de SELECT, porque
+# Supabase solo cuenta escrituras como actividad garantizada.
+# Corre cada 2 días para tener margen de sobra.
+# Ubicación en el repo: .github/workflows/supabase-heartbeat.yml
+# ============================================================
+name: Supabase Heartbeat
 
+on:
+  schedule:
+    # Cada 2 días a las 12:00 UTC (09:00 Uruguay aprox.)
+    - cron: '0 12 */2 * *'
+  workflow_dispatch:   # permite ejecutarlo a mano desde la pestaña Actions
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Heartbeat (UPDATE a Supabase)
+        run: |
+          echo "Escribiendo timestamp en heartbeat (actividad real)..."
+          NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          HTTP_CODE=$(curl -s -o /tmp/resp.txt -w "%{http_code}" \
+            -X PATCH \
+            "${{ secrets.SUPABASE_URL }}/rest/v1/heartbeat?id=eq.1" \
+            -H "apikey: ${{ secrets.SUPABASE_ANON_KEY }}" \
+            -H "Authorization: Bearer ${{ secrets.SUPABASE_ANON_KEY }}" \
+            -H "Content-Type: application/json" \
+            -H "Prefer: return=representation" \
+            -d "{\"last_ping\": \"${NOW}\"}")
+          echo "HTTP status: $HTTP_CODE"
+          echo "Response: $(cat /tmp/resp.txt)"
+          # Un UPDATE exitoso devuelve 200 (con return=representation) o 204
+          if [ "$HTTP_CODE" != "200" ] && [ "$HTTP_CODE" != "204" ]; then
+            echo "::error::Heartbeat falló (HTTP $HTTP_CODE). Revisá URL, key y la policy heartbeat_public_update."
+            exit 1
+          fi
+          # Verificar que efectivamente devolvió la fila actualizada
+          if [ "$HTTP_CODE" == "200" ] && ! grep -q "last_ping" /tmp/resp.txt; then
+            echo "::error::El UPDATE respondió 200 pero no actualizó ninguna fila. ¿Existe la fila id=1?"
+            exit 1
+          fi
+          echo "✅ Heartbeat OK — se escribió actividad real en Supabase."
