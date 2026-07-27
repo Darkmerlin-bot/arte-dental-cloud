@@ -1,1 +1,56 @@
+# ============================================================
+# Arte Dental — Heartbeat anti-pausa de Supabase (v3)
+# Cambios vs v2:
+#  - Corre cada 2 HORAS (la doc de Supabase pide "unas pocas
+#    consultas por día durante la semana", no 1 cada 2 días)
+#  - Verificación ESTRICTA: si el UPDATE no modifica la fila,
+#    el workflow FALLA (antes decía "Success" igual)
+# Ubicación: .github/workflows/supabase-heartbeat.yml
+# ============================================================
+name: Supabase Heartbeat
 
+on:
+  schedule:
+    - cron: '0 */2 * * *'   # cada 2 horas
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Heartbeat (UPDATE real + verificación estricta)
+        run: |
+          set -euo pipefail
+          NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          echo "Escribiendo last_ping = $NOW"
+
+          HTTP_CODE=$(curl -s -o /tmp/resp.txt -w "%{http_code}" \
+            -X PATCH \
+            "${{ secrets.SUPABASE_URL }}/rest/v1/heartbeat?id=eq.1" \
+            -H "apikey: ${{ secrets.SUPABASE_ANON_KEY }}" \
+            -H "Authorization: Bearer ${{ secrets.SUPABASE_ANON_KEY }}" \
+            -H "Content-Type: application/json" \
+            -H "Prefer: return=representation" \
+            -d "{\"last_ping\": \"${NOW}\"}")
+
+          BODY=$(cat /tmp/resp.txt)
+          echo "HTTP: $HTTP_CODE"
+          echo "Body: $BODY"
+
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::error::HTTP $HTTP_CODE. Con Prefer:return=representation un UPDATE OK devuelve 200. Un 204 o 4xx significa que RLS bloqueó la escritura o no existe la fila id=1. Corré heartbeat_fix.sql."
+            exit 1
+          fi
+
+          # El body debe ser un array con la fila actualizada
+          if [ "$BODY" == "[]" ] || [ -z "$BODY" ]; then
+            echo "::error::El UPDATE no modificó ninguna fila (respuesta vacía). RLS lo está bloqueando o falta la fila id=1."
+            exit 1
+          fi
+
+          if ! echo "$BODY" | grep -q "last_ping"; then
+            echo "::error::Respuesta inesperada, no contiene last_ping."
+            exit 1
+          fi
+
+          echo "✅ Escritura confirmada en Supabase (fila devuelta por la API)."
